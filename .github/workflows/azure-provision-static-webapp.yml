@@ -15,6 +15,7 @@ permissions:
 
 env:
   RESOURCE_GROUP: rg-linkedin
+  STATIC_WEBAPP_LOCATION: westeurope
 
 jobs:
   provision:
@@ -43,6 +44,19 @@ jobs:
             echo "name=${SAFE}-swa" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve Static Web App location
+        id: swa_location
+        shell: bash
+        run: |
+          if az staticwebapp show --name "${{ steps.naming.outputs.name }}" --resource-group "$RESOURCE_GROUP" --output none 2>/dev/null; then
+            S_LOCATION="$(az staticwebapp show --name "${{ steps.naming.outputs.name }}" --resource-group "$RESOURCE_GROUP" --query location -o tsv)"
+          elif [ -n "${{ vars.AZURE_STATIC_WEBAPP_LOCATION }}" ]; then
+            S_LOCATION="${{ vars.AZURE_STATIC_WEBAPP_LOCATION }}"
+          else
+            S_LOCATION="$STATIC_WEBAPP_LOCATION"
+          fi
+          echo "location=$S_LOCATION" >> "$GITHUB_OUTPUT"
+
       - name: Ensure resource group exists
         id: rg
         shell: bash
@@ -64,7 +78,7 @@ jobs:
           az deployment group create \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters staticWebAppName="${{ steps.naming.outputs.name }}" location="${{ steps.rg.outputs.location }}" sku="Free" \
+            --parameters staticWebAppName="${{ steps.naming.outputs.name }}" location="${{ steps.swa_location.outputs.location }}" sku="Free" \
             --output table
 
       - name: Print Static Web App details
