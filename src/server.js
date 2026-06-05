@@ -139,8 +139,21 @@ app.get('/', (_req, res) => {
           </label>
 
           <label>
+            Registreringsmodus
+            <select name="registrationMode" required>
+              <option value="relay" selected>Relay via denne tjenesten</option>
+              <option value="direct">Direkte custom endpoint (Power Automate)</option>
+            </select>
+          </label>
+
+          <label>
             Kundens mottaker-endepunkt (https, for videresending)
-            <input name="customerWebhookUrl" required placeholder="https://kunde.no/webhook/linkedin" />
+            <input name="customerWebhookUrl" placeholder="https://kunde.no/webhook/linkedin" />
+          </label>
+
+          <label class="full">
+            Direkte webhook URL til LinkedIn (https, optional)
+            <input name="directWebhookUrl" placeholder="https://prod-xx.westeurope.logic.azure.com/workflows/..." />
           </label>
 
           <label>
@@ -191,7 +204,10 @@ app.get('/', (_req, res) => {
           Webhook base URL mot LinkedIn: <code>${escapeHtml(getWebhookBaseUrlHint())}</code>
         </p>
         <p class="small">
-          LinkedIn-registrert webhook blir automatisk: <code>&lt;webhook-base-url&gt;/webhooks/linkedin/&lt;id&gt;</code>
+          Relay-modus registrerer: <code>&lt;webhook-base-url&gt;/webhooks/linkedin/&lt;id&gt;</code>
+        </p>
+        <p class="small">
+          Direct-modus registrerer den eksakte URLen i feltet <code>Direkte webhook URL til LinkedIn</code>
         </p>
       </div>
     </div>
@@ -204,7 +220,9 @@ app.post('/auth/linkedin/start', (req, res) => {
     assertConfig();
 
     const customerId = (req.body.customerId || '').trim();
+    const registrationMode = (req.body.registrationMode || 'relay').trim();
     const customerWebhookUrl = (req.body.customerWebhookUrl || '').trim();
+    const directWebhookUrl = (req.body.directWebhookUrl || '').trim();
     const ownerType = (req.body.ownerType || '').trim();
     const ownerUrn = (req.body.ownerUrn || '').trim();
     const leadType = (req.body.leadType || 'SPONSORED').trim();
@@ -216,9 +234,32 @@ app.post('/auth/linkedin/start', (req, res) => {
       throw new Error('customerId mangler');
     }
 
-    const parsedCustomerUrl = new URL(customerWebhookUrl);
-    if (parsedCustomerUrl.protocol !== 'https:') {
-      throw new Error('Kundens webhook endpoint må være HTTPS');
+    if (!['relay', 'direct'].includes(registrationMode)) {
+      throw new Error('registrationMode må være relay eller direct');
+    }
+
+    let parsedCustomerUrl;
+    if (customerWebhookUrl) {
+      parsedCustomerUrl = new URL(customerWebhookUrl);
+      if (parsedCustomerUrl.protocol !== 'https:') {
+        throw new Error('Kundens webhook endpoint må være HTTPS');
+      }
+    }
+
+    let parsedDirectUrl;
+    if (directWebhookUrl) {
+      parsedDirectUrl = new URL(directWebhookUrl);
+      if (parsedDirectUrl.protocol !== 'https:') {
+        throw new Error('Direct webhook URL må være HTTPS');
+      }
+    }
+
+    if (registrationMode === 'relay' && !customerWebhookUrl) {
+      throw new Error('I relay-modus må kundens mottaker-endepunkt fylles ut');
+    }
+
+    if (registrationMode === 'direct' && !directWebhookUrl) {
+      throw new Error('I direct-modus må direkte webhook URL fylles ut');
     }
 
     if (!['sponsoredAccount', 'organization'].includes(ownerType)) {
@@ -230,7 +271,9 @@ app.post('/auth/linkedin/start', (req, res) => {
     const state = crypto.randomUUID();
     oauthStateStore.set(state, {
       customerId,
+      registrationMode,
       customerWebhookUrl,
+      directWebhookUrl,
       ownerType,
       ownerUrn,
       leadType,
@@ -276,9 +319,16 @@ app.get('/auth/linkedin/callback', async (req, res) => {
       throw new Error('Fikk ikke access_token fra LinkedIn');
     }
 
-    const subscriptionKey = crypto.randomUUID();
-    const webhookBaseUrl = getWebhookBaseUrl();
-    const webhookUrlForLinkedIn = `${webhookBaseUrl}/webhooks/linkedin/${subscriptionKey}`;
+    let relaySubscriptionKey;
+    let webhookUrlForLinkedIn;
+
+    if (config.registrationMode === 'direct') {
+      webhookUrlForLinkedIn = config.directWebhookUrl;
+    } else {
+      relaySubscriptionKey = crypto.randomUUID();
+      const webhookBaseUrl = getWebhookBaseUrl();
+      webhookUrlForLinkedIn = `${webhookBaseUrl}/webhooks/linkedin/${relaySubscriptionKey}`;
+    }
 
     const linkedInResult = await createLeadNotificationSubscription(token, {
       ownerType: config.ownerType,
@@ -290,10 +340,14 @@ app.get('/auth/linkedin/callback', async (req, res) => {
       apiVersion: config.apiVersion
     });
 
-    subscriptionStore.set(subscriptionKey, {
+    const trackingId = relaySubscriptionKey || crypto.randomUUID();
+
+    subscriptionStore.set(trackingId, {
       createdAt: new Date().toISOString(),
       customerId: config.customerId,
+      registrationMode: config.registrationMode,
       customerWebhookUrl: config.customerWebhookUrl,
+      directWebhookUrl: config.directWebhookUrl,
       ownerType: config.ownerType,
       ownerUrn: config.ownerUrn,
       leadType: config.leadType,
@@ -310,6 +364,7 @@ app.get('/auth/linkedin/callback', async (req, res) => {
   <body style="font-family:Segoe UI,sans-serif;padding:24px">
     <h2>Webhook registrert</h2>
     <p><b>Kunde:</b> ${escapeHtml(config.customerId)}</p>
+    <p><b>Modus:</b> ${escapeHtml(config.registrationMode)}</p>
     <p><b>Webhook URL sendt til LinkedIn:</b> ${escapeHtml(webhookUrlForLinkedIn)}</p>
     <p><b>LinkedIn status:</b> OK</p>
     <p><a href="/">Tilbake</a></p>
@@ -360,6 +415,10 @@ app.post('/webhooks/linkedin/:subscriptionKey', async (req, res) => {
     const payload = req.body;
     if (isDuplicate(payload)) {
       return res.status(200).json({ status: 'duplicate_ignored' });
+    }
+
+    if (!config.customerWebhookUrl) {
+      return res.status(200).json({ status: 'accepted_no_forward_target' });
     }
 
     const forwardResponse = await fetch(config.customerWebhookUrl, {

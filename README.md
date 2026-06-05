@@ -8,6 +8,11 @@ Denne tjenesten lar deg:
 - verifisere `X-LI-Signature` på innkommende events
 - videresende events til kundens webhook-endepunkt
 
+Registreringsmoduser:
+
+- `relay`: LinkedIn registreres mot denne tjenesten, som videresender videre til kundens endpoint
+- `direct`: LinkedIn registreres direkte mot et custom endpoint (f.eks. Power Automate)
+
 ## 1) Oppsett
 
 1. Installer avhengigheter:
@@ -24,7 +29,9 @@ Denne tjenesten lar deg:
 1. Åpne `http://localhost:3000`
 2. Fyll inn:
    - kunde-ID (internt navn)
-   - kundens webhook URL (må være HTTPS og offentlig tilgjengelig)
+   - registreringsmodus (`relay` eller `direct`)
+   - kundens webhook URL (må være HTTPS og offentlig tilgjengelig, brukt i `relay`)
+   - direkte webhook URL (må være HTTPS, brukt i `direct`)
    - owner type (`sponsoredAccount` eller `organization`)
    - owner URN (f.eks. `urn:li:sponsoredAccount:123456`)
 3. Trykk **Start OAuth + register webhook**
@@ -39,6 +46,7 @@ Denne tjenesten lar deg:
 - Kun HTTPS webhook-URL støttes av LinkedIn
 - `localhost` kan ikke brukes som webhook URL mot LinkedIn (må være offentlig)
 - `ngrok` er ikke støttet av LinkedIn ifølge siste docs
+- I `direct`-modus må custom endpointet selv svare korrekt på LinkedIn challenge (HMAC SHA256)
 
 ## 4) Endepunkter
 
