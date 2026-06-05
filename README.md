@@ -78,3 +78,15 @@ Azure resource group er satt til `rg-linkedin`.
 
 Denne repoen inneholder en Express-backend for OAuth/webhook. Azure Static Web Apps hoster kun statisk frontend her (`web/`).
 For webhook-backend i Azure må du bruke en server-hosting-tjeneste (for eksempel Azure App Service eller Container Apps), eller bygge om backend til Azure Functions.
+
+## 7) Azure Web App backend (automatisk deploy via git)
+
+Backend er satt opp i Azure Web App:
+
+- Web App: `linkedinwebhook-api-pa`
+- URL: `https://linkedinwebhook-api-pa.azurewebsites.net`
+- Callback URI: `https://linkedinwebhook-api-pa.azurewebsites.net/auth/linkedin/callback`
+
+Workflow for backend deploy ved push til `main`:
+
+- `.github/workflows/azure-deploy-webapp-backend.yml`
