@@ -13,10 +13,16 @@ app.http('linkedinWebhook', {
     }
 
     if (request.method === 'GET') {
-      return handleChallenge(request);
+      return handleChallenge(request.query.get('challengeCode') || '');
     }
 
     if (request.method === 'POST') {
+      // Some integrations may send challengeCode in POST instead of GET.
+      const challengeCode = await readChallengeCodeFromPost(request);
+      if (challengeCode) {
+        return handleChallenge(challengeCode);
+      }
+
       return handleEventForward(request, context);
     }
 
@@ -24,9 +30,8 @@ app.http('linkedinWebhook', {
   }
 });
 
-function handleChallenge(request) {
+function handleChallenge(challengeCode) {
   const linkedInClientSecret = process.env.LINKEDIN_CLIENT_SECRET || '';
-  const challengeCode = request.query.get('challengeCode') || '';
 
   if (!challengeCode) {
     return jsonResponse(200, { status: 'ok' });
@@ -45,6 +50,30 @@ function handleChallenge(request) {
     challengeCode,
     challengeResponse
   });
+}
+
+async function readChallengeCodeFromPost(request) {
+  const queryChallenge = request.query.get('challengeCode') || '';
+  if (queryChallenge) {
+    return queryChallenge;
+  }
+
+  const contentType = (request.headers.get('content-type') || '').toLowerCase();
+
+  if (contentType.includes('application/json')) {
+    const body = await request.json().catch(() => null);
+    if (body && typeof body.challengeCode === 'string') {
+      return body.challengeCode;
+    }
+  }
+
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    const textBody = await request.text().catch(() => '');
+    const params = new URLSearchParams(textBody);
+    return params.get('challengeCode') || '';
+  }
+
+  return '';
 }
 
 async function handleEventForward(request, context) {
