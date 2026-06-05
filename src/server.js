@@ -16,7 +16,6 @@ const linkedInApiVersion = process.env.LINKEDIN_API_VERSION || '202605';
 
 const oauthStateStore = new Map();
 const subscriptionStore = new Map();
-const dedupStore = new Set();
 
 app.use(express.urlencoded({ extended: false }));
 app.use(
@@ -128,8 +127,9 @@ app.get('/', (_req, res) => {
         <p>
           Denne siden brukes av deg (ingen kundelogin). Fyll inn kundedata,
           kjør OAuth mot kundens Campaign Manager-bruker, og appen registrerer
-          leadNotifications automatisk mot denne tjenesten. Hendelser videresendes
-          deretter til kundens endepunkt.
+          leadNotifications automatisk mot denne tjenesten.
+          Tjenesten svarer på LinkedIn challenge og videresender events
+          direkte til Power Automate-endepunktet ditt.
         </p>
 
         <form method="POST" action="/auth/linkedin/start">
@@ -139,21 +139,8 @@ app.get('/', (_req, res) => {
           </label>
 
           <label>
-            Registreringsmodus
-            <select name="registrationMode" required>
-              <option value="relay" selected>Relay via denne tjenesten</option>
-              <option value="direct">Direkte custom endpoint (Power Automate)</option>
-            </select>
-          </label>
-
-          <label>
-            Kundens mottaker-endepunkt (https, for videresending)
-            <input name="customerWebhookUrl" placeholder="https://kunde.no/webhook/linkedin" />
-          </label>
-
-          <label class="full">
-            Direkte webhook URL til LinkedIn (https, optional)
-            <input name="directWebhookUrl" placeholder="https://prod-xx.westeurope.logic.azure.com/workflows/..." />
+            Power Automate webhook URL (https)
+            <input name="customerWebhookUrl" required placeholder="https://prod-xx.westeurope.logic.azure.com/workflows/..." />
           </label>
 
           <label>
@@ -204,10 +191,7 @@ app.get('/', (_req, res) => {
           Webhook base URL mot LinkedIn: <code>${escapeHtml(getWebhookBaseUrlHint())}</code>
         </p>
         <p class="small">
-          Relay-modus registrerer: <code>&lt;webhook-base-url&gt;/webhooks/linkedin/&lt;id&gt;</code>
-        </p>
-        <p class="small">
-          Direct-modus registrerer den eksakte URLen i feltet <code>Direkte webhook URL til LinkedIn</code>
+          Registrert URL hos LinkedIn blir: <code>&lt;webhook-base-url&gt;/webhooks/linkedin/&lt;id&gt;</code>
         </p>
       </div>
     </div>
@@ -220,9 +204,7 @@ app.post('/auth/linkedin/start', (req, res) => {
     assertConfig();
 
     const customerId = (req.body.customerId || '').trim();
-    const registrationMode = (req.body.registrationMode || 'relay').trim();
     const customerWebhookUrl = (req.body.customerWebhookUrl || '').trim();
-    const directWebhookUrl = (req.body.directWebhookUrl || '').trim();
     const ownerType = (req.body.ownerType || '').trim();
     const ownerUrn = (req.body.ownerUrn || '').trim();
     const leadType = (req.body.leadType || 'SPONSORED').trim();
@@ -234,32 +216,13 @@ app.post('/auth/linkedin/start', (req, res) => {
       throw new Error('customerId mangler');
     }
 
-    if (!['relay', 'direct'].includes(registrationMode)) {
-      throw new Error('registrationMode må være relay eller direct');
+    if (!customerWebhookUrl) {
+      throw new Error('Power Automate webhook URL mangler');
     }
 
-    let parsedCustomerUrl;
-    if (customerWebhookUrl) {
-      parsedCustomerUrl = new URL(customerWebhookUrl);
-      if (parsedCustomerUrl.protocol !== 'https:') {
-        throw new Error('Kundens webhook endpoint må være HTTPS');
-      }
-    }
-
-    let parsedDirectUrl;
-    if (directWebhookUrl) {
-      parsedDirectUrl = new URL(directWebhookUrl);
-      if (parsedDirectUrl.protocol !== 'https:') {
-        throw new Error('Direct webhook URL må være HTTPS');
-      }
-    }
-
-    if (registrationMode === 'relay' && !customerWebhookUrl) {
-      throw new Error('I relay-modus må kundens mottaker-endepunkt fylles ut');
-    }
-
-    if (registrationMode === 'direct' && !directWebhookUrl) {
-      throw new Error('I direct-modus må direkte webhook URL fylles ut');
+    const parsedCustomerUrl = new URL(customerWebhookUrl);
+    if (parsedCustomerUrl.protocol !== 'https:') {
+      throw new Error('Power Automate webhook URL må være HTTPS');
     }
 
     if (!['sponsoredAccount', 'organization'].includes(ownerType)) {
@@ -271,9 +234,7 @@ app.post('/auth/linkedin/start', (req, res) => {
     const state = crypto.randomUUID();
     oauthStateStore.set(state, {
       customerId,
-      registrationMode,
       customerWebhookUrl,
-      directWebhookUrl,
       ownerType,
       ownerUrn,
       leadType,
@@ -319,16 +280,9 @@ app.get('/auth/linkedin/callback', async (req, res) => {
       throw new Error('Fikk ikke access_token fra LinkedIn');
     }
 
-    let relaySubscriptionKey;
-    let webhookUrlForLinkedIn;
-
-    if (config.registrationMode === 'direct') {
-      webhookUrlForLinkedIn = config.directWebhookUrl;
-    } else {
-      relaySubscriptionKey = crypto.randomUUID();
-      const webhookBaseUrl = getWebhookBaseUrl();
-      webhookUrlForLinkedIn = `${webhookBaseUrl}/webhooks/linkedin/${relaySubscriptionKey}`;
-    }
+    const relaySubscriptionKey = crypto.randomUUID();
+    const webhookBaseUrl = getWebhookBaseUrl();
+    const webhookUrlForLinkedIn = `${webhookBaseUrl}/webhooks/linkedin/${relaySubscriptionKey}`;
 
     const linkedInResult = await createLeadNotificationSubscription(token, {
       ownerType: config.ownerType,
@@ -340,14 +294,12 @@ app.get('/auth/linkedin/callback', async (req, res) => {
       apiVersion: config.apiVersion
     });
 
-    const trackingId = relaySubscriptionKey || crypto.randomUUID();
+    const trackingId = relaySubscriptionKey;
 
     subscriptionStore.set(trackingId, {
       createdAt: new Date().toISOString(),
       customerId: config.customerId,
-      registrationMode: config.registrationMode,
       customerWebhookUrl: config.customerWebhookUrl,
-      directWebhookUrl: config.directWebhookUrl,
       ownerType: config.ownerType,
       ownerUrn: config.ownerUrn,
       leadType: config.leadType,
@@ -364,8 +316,8 @@ app.get('/auth/linkedin/callback', async (req, res) => {
   <body style="font-family:Segoe UI,sans-serif;padding:24px">
     <h2>Webhook registrert</h2>
     <p><b>Kunde:</b> ${escapeHtml(config.customerId)}</p>
-    <p><b>Modus:</b> ${escapeHtml(config.registrationMode)}</p>
     <p><b>Webhook URL sendt til LinkedIn:</b> ${escapeHtml(webhookUrlForLinkedIn)}</p>
+    <p><b>Videresender events til:</b> ${escapeHtml(config.customerWebhookUrl)}</p>
     <p><b>LinkedIn status:</b> OK</p>
     <p><a href="/">Tilbake</a></p>
   </body>
@@ -399,26 +351,11 @@ app.get('/webhooks/linkedin/:subscriptionKey', (req, res) => {
 
 app.post('/webhooks/linkedin/:subscriptionKey', async (req, res) => {
   try {
-    assertConfig();
-
     const subscriptionKey = req.params.subscriptionKey;
     const config = subscriptionStore.get(subscriptionKey);
 
     if (!config) {
       return res.status(404).json({ error: 'Ukjent subscriptionKey' });
-    }
-
-    if (!verifyLinkedInSignature(req.rawBody || Buffer.from(JSON.stringify(req.body || {}), 'utf8'), req.headers['x-li-signature'], linkedInClientSecret)) {
-      return res.status(401).json({ error: 'Ugyldig X-LI-Signature' });
-    }
-
-    const payload = req.body;
-    if (isDuplicate(payload)) {
-      return res.status(200).json({ status: 'duplicate_ignored' });
-    }
-
-    if (!config.customerWebhookUrl) {
-      return res.status(200).json({ status: 'accepted_no_forward_target' });
     }
 
     const forwardResponse = await fetch(config.customerWebhookUrl, {
@@ -427,7 +364,7 @@ app.post('/webhooks/linkedin/:subscriptionKey', async (req, res) => {
         'content-type': 'application/json',
         'x-forwarded-by': 'linkedin-webhook-service'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(req.body || {})
     });
 
     if (!forwardResponse.ok) {
@@ -508,44 +445,6 @@ function parseOptionalJson(value, fieldName) {
 
 function createChallengeResponse(challengeCode, clientSecret) {
   return crypto.createHmac('sha256', clientSecret).update(challengeCode, 'utf8').digest('hex');
-}
-
-function verifyLinkedInSignature(rawBody, signatureHeader, clientSecret) {
-  if (!signatureHeader || typeof signatureHeader !== 'string') {
-    return false;
-  }
-
-  const expected = `hmacsha256=${crypto.createHmac('sha256', clientSecret).update(rawBody).digest('hex')}`;
-  const headerValue = signatureHeader.trim();
-
-  // timingSafeEqual requires same-length inputs.
-  if (expected.length !== headerValue.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(headerValue));
-}
-
-function isDuplicate(payload) {
-  const lead = payload && payload.leadGenFormResponse;
-  const occurredAt = payload && payload.occurredAt;
-
-  if (!lead || !occurredAt) {
-    return false;
-  }
-
-  const key = `${lead}_${occurredAt}`;
-  if (dedupStore.has(key)) {
-    return true;
-  }
-
-  dedupStore.add(key);
-  if (dedupStore.size > 10_000) {
-    const first = dedupStore.values().next().value;
-    dedupStore.delete(first);
-  }
-
-  return false;
 }
 
 async function fetchLinkedInToken(code) {

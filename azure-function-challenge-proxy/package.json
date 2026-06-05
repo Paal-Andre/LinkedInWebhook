@@ -1,0 +1,13 @@
+{
+  "name": "linkedin-challenge-proxy-function",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal LinkedIn challenge proxy for Power Automate",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0"
+  }
+}

@@ -5,13 +5,9 @@ Denne tjenesten lar deg:
 - autorisere mot en kundes LinkedIn Campaign Manager-konto (OAuth)
 - registrere webhook-subscription mot `https://api.linkedin.com/rest/leadNotifications`
 - svare på LinkedIn challenge med hex-encoded HMAC-SHA256
-- verifisere `X-LI-Signature` på innkommende events
-- videresende events til kundens webhook-endepunkt
+- videresende innkommende events til Power Automate webhook-endepunkt
 
-Registreringsmoduser:
-
-- `relay`: LinkedIn registreres mot denne tjenesten, som videresender videre til kundens endpoint
-- `direct`: LinkedIn registreres direkte mot et custom endpoint (f.eks. Power Automate)
+Denne tjenesten er en minimal challenge-proxy. LinkedIn registreres alltid mot denne tjenesten.
 
 ## 1) Oppsett
 
@@ -29,9 +25,7 @@ Registreringsmoduser:
 1. Åpne `http://localhost:3000`
 2. Fyll inn:
    - kunde-ID (internt navn)
-   - registreringsmodus (`relay` eller `direct`)
-   - kundens webhook URL (må være HTTPS og offentlig tilgjengelig, brukt i `relay`)
-   - direkte webhook URL (må være HTTPS, brukt i `direct`)
+   - Power Automate webhook URL (må være HTTPS)
    - owner type (`sponsoredAccount` eller `organization`)
    - owner URN (f.eks. `urn:li:sponsoredAccount:123456`)
 3. Trykk **Start OAuth + register webhook**
@@ -45,8 +39,8 @@ Registreringsmoduser:
 - LinkedIn re-validerer periodisk (ca. hver 2. time)
 - Kun HTTPS webhook-URL støttes av LinkedIn
 - `localhost` kan ikke brukes som webhook URL mot LinkedIn (må være offentlig)
-- `ngrok` er ikke støttet av LinkedIn ifølge siste docs
-- I `direct`-modus må custom endpointet selv svare korrekt på LinkedIn challenge (HMAC SHA256)
+- LinkedIn-endepunktet som registreres er: `<WEBHOOK_PUBLIC_BASE_URL>/webhooks/linkedin/<subscriptionKey>`
+- Denne tjenesten beregner challenge dynamisk per forespørsel (ingen statisk hex)
 
 ## 4) Endepunkter
 
@@ -54,7 +48,7 @@ Registreringsmoduser:
 - `POST /auth/linkedin/start` starter OAuth
 - `GET /auth/linkedin/callback` håndterer OAuth callback + registrering
 - `GET /webhooks/linkedin/:subscriptionKey` challenge-respons
-- `POST /webhooks/linkedin/:subscriptionKey` tar imot events, verifiserer signatur, videresender
+- `POST /webhooks/linkedin/:subscriptionKey` tar imot events og videresender til Power Automate
 - `GET /api/subscriptions` viser aktive registreringer i minne
 
 ## 5) Persistens
@@ -98,3 +92,31 @@ Backend er satt opp i Azure Web App:
 Workflow for backend deploy ved push til `main`:
 
 - `.github/workflows/azure-deploy-webapp-backend.yml`
+
+## 8) Minimal Azure Function challenge-proxy (anbefalt arkitektur)
+
+Hvis du vil kjøre en enda tynnere arkitektur enn Express-appen, ligger en minimal Azure Function i:
+
+- `azure-function-challenge-proxy/`
+
+Den gjør kun dette:
+
+- `GET /webhooks/linkedin/{subscriptionKey}`: svarer LinkedIn challenge med hex HMAC SHA256
+- `POST /webhooks/linkedin/{subscriptionKey}`: videresender payload til Power Automate
+
+### Hurtig oppsett
+
+1. Gå til mappen:
+   - `cd azure-function-challenge-proxy`
+2. Installer avhengigheter:
+   - `npm install`
+3. Kopier settings:
+   - `copy local.settings.json.example local.settings.json`
+4. Sett verdier:
+   - `LINKEDIN_CLIENT_SECRET`
+   - `POWER_AUTOMATE_WEBHOOK_URL`
+   - `VERIFY_LINKEDIN_SIGNATURE` (`true`/`false`)
+5. Kjør lokalt:
+   - `npm start`
+
+Denne varianten er stateless og passer godt når Power Automate skal gjøre all businesslogikk.

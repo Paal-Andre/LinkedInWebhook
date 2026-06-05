@@ -1,0 +1,10 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "LINKEDIN_CLIENT_SECRET": "SET_ME",
+    "POWER_AUTOMATE_WEBHOOK_URL": "https://prod-xx.westeurope.logic.azure.com/workflows/...",
+    "VERIFY_LINKEDIN_SIGNATURE": "false"
+  }
+}
