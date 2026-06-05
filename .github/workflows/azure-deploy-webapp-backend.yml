@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - src/**
+      - azure-function-challenge-proxy/**
       - package.json
       - package-lock.json
       - .github/workflows/azure-deploy-webapp-backend.yml
