@@ -15,7 +15,6 @@ permissions:
 
 env:
   RESOURCE_GROUP: rg-linkedin
-  LOCATION: westeurope
 
 jobs:
   provision:
@@ -44,12 +43,19 @@ jobs:
           fi
 
       - name: Ensure resource group exists
+        id: rg
         shell: bash
         run: |
-          az group create \
-            --name "$RESOURCE_GROUP" \
-            --location "$LOCATION" \
-            --output none
+          if az group show --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
+            RG_LOCATION="$(az group show --name "$RESOURCE_GROUP" --query location -o tsv)"
+          else
+            RG_LOCATION="norwayeast"
+            az group create \
+              --name "$RESOURCE_GROUP" \
+              --location "$RG_LOCATION" \
+              --output none
+          fi
+          echo "location=$RG_LOCATION" >> "$GITHUB_OUTPUT"
 
       - name: Deploy Bicep
         shell: bash
@@ -57,7 +63,7 @@ jobs:
           az deployment group create \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/main.bicep \
-            --parameters staticWebAppName="${{ steps.naming.outputs.name }}" location="$LOCATION" sku="Free" \
+            --parameters staticWebAppName="${{ steps.naming.outputs.name }}" location="${{ steps.rg.outputs.location }}" sku="Free" \
             --output table
 
       - name: Print Static Web App details
