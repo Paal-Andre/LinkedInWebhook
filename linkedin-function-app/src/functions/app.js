@@ -7,7 +7,7 @@ const subscriptionStore = new Map();
 app.http('adminPage', {
   methods: ['GET'],
   authLevel: 'anonymous',
-  route: '',
+  route: 'admin',
   handler: async () => {
     const apiVersion = process.env.LINKEDIN_API_VERSION || '202605';
     const redirectUri = getRedirectUri();
@@ -101,12 +101,16 @@ app.http('adminPage', {
 });
 
 app.http('startOAuth', {
-  methods: ['POST'],
+  methods: ['GET', 'POST'],
   authLevel: 'anonymous',
   route: 'auth/linkedin/start',
   handler: async (request) => {
     try {
       assertConfig();
+      if (request.method === 'GET') {
+        return htmlResponse(renderStartOAuthForm(process.env.LINKEDIN_API_VERSION || '202605'));
+      }
+
       const form = await readForm(request);
 
       const customerId = (form.customerId || '').trim();
@@ -536,6 +540,79 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function renderStartOAuthForm(apiVersion) {
+  return `<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Start LinkedIn OAuth</title>
+    <style>
+      body { font-family: Segoe UI, sans-serif; margin: 0; background: #f4f7fb; color: #1f2430; }
+      .wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+      .card { background: #fff; border: 1px solid #d7e0ec; border-radius: 12px; padding: 22px; }
+      form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+      input, select, textarea { padding: 10px 12px; border-radius: 8px; border: 1px solid #cfd9e6; }
+      textarea { min-height: 90px; resize: vertical; }
+      .full { grid-column: span 2; }
+      button { grid-column: span 2; border: 0; border-radius: 8px; padding: 11px 14px; background: #0a66c2; color: #fff; font-weight: 600; cursor: pointer; }
+      @media (max-width: 740px) { form { grid-template-columns: 1fr; } .full, button { grid-column: span 1; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Start LinkedIn OAuth</h1>
+        <form method="POST" action="/auth/linkedin/start">
+          <label>
+            Kunde-ID
+            <input name="customerId" required placeholder="kunde-a" />
+          </label>
+          <label>
+            Power Automate webhook URL (https)
+            <input name="customerWebhookUrl" required placeholder="https://..." />
+          </label>
+          <label>
+            Owner type
+            <select name="ownerType" required>
+              <option value="sponsoredAccount" selected>sponsoredAccount</option>
+              <option value="organization">organization</option>
+            </select>
+          </label>
+          <label>
+            Owner URN
+            <input name="ownerUrn" required placeholder="urn:li:sponsoredAccount:123456" />
+          </label>
+          <label>
+            Lead type
+            <select name="leadType" required>
+              <option value="SPONSORED" selected>SPONSORED</option>
+              <option value="EVENT">EVENT</option>
+              <option value="COMPANY">COMPANY</option>
+              <option value="ORGANIZATION_PRODUCT">ORGANIZATION_PRODUCT</option>
+            </select>
+          </label>
+          <label>
+            LinkedIn API version
+            <input name="apiVersion" value="${escapeHtml(apiVersion)}" />
+          </label>
+          <label class="full">
+            Optional associatedEntity (JSON)
+            <textarea name="associatedEntityJson" placeholder='{"event":"urn:li:event:123"}'></textarea>
+          </label>
+          <label class="full">
+            Optional versionedForm URN
+            <input name="versionedForm" placeholder="urn:li:versionedLeadGenForm:(urn:li:leadGenForm:818,1)" />
+          </label>
+          <button type="submit">Start OAuth + register webhook</button>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>`;
 }
 
 function toMessage(error) {

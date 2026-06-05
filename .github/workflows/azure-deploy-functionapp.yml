@@ -15,6 +15,7 @@ permissions:
 
 env:
   FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+  RESOURCE_GROUP: rg-linkedin
 
 jobs:
   deploy:
@@ -31,13 +32,25 @@ jobs:
             exit 1
           fi
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Azure login via OIDC (no external action)
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID secrets" >&2
+            exit 1
+          fi
+
+          TOKEN_RESPONSE=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange")
+          OIDC_TOKEN=$(python3 -c 'import sys, json; print(json.load(sys.stdin)["value"])' <<< "$TOKEN_RESPONSE")
+
+          az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
+          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -50,8 +63,15 @@ jobs:
           cd linkedin-function-app
           npm ci
 
-      - name: Deploy Function App
-        uses: Azure/functions-action@v1
-        with:
-          app-name: ${{ env.FUNCTIONAPP_NAME }}
-          package: linkedin-function-app
+      - name: Deploy Function App with zip deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd linkedin-function-app
+          zip -r ../functionapp.zip . -x "node_modules/*" "local.settings.json"
+
+          az functionapp deployment source config-zip \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$FUNCTIONAPP_NAME" \
+            --src ../functionapp.zip \
+            --output none

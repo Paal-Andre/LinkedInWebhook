@@ -11,7 +11,7 @@ Den dekker hele flyten:
 
 ## Endepunkter
 
-- `GET /` admin-side med registreringsskjema
+- `GET /admin` admin-side med registreringsskjema
 - `POST /auth/linkedin/start` starter OAuth
 - `GET /auth/linkedin/callback` fullforer OAuth + registrering
 - `GET|POST /webhooks/linkedin/{subscriptionKey}` challenge + events
