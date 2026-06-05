@@ -43,8 +43,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
-            echo "Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID secrets" >&2
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ]; then
+            echo "Missing AZURE_CLIENT_ID / AZURE_TENANT_ID secrets" >&2
             exit 1
           fi
 
@@ -52,7 +52,19 @@ jobs:
           OIDC_TOKEN=$(python3 -c 'import sys, json; print(json.load(sys.stdin)["value"])' <<< "$TOKEN_RESPONSE")
 
           az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
-          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+
+          if [ -n "${AZURE_SUBSCRIPTION_ID:-}" ] && az account show --subscription "$AZURE_SUBSCRIPTION_ID" --output none 2>/dev/null; then
+            az account set --subscription "$AZURE_SUBSCRIPTION_ID"
+            echo "Using configured subscription: $AZURE_SUBSCRIPTION_ID"
+          else
+            FALLBACK_SUBSCRIPTION_ID=$(az account list --query "[0].id" -o tsv)
+            if [ -z "$FALLBACK_SUBSCRIPTION_ID" ]; then
+              echo "No accessible Azure subscriptions found for this service principal/tenant." >&2
+              exit 1
+            fi
+            az account set --subscription "$FALLBACK_SUBSCRIPTION_ID"
+            echo "Using fallback subscription: $FALLBACK_SUBSCRIPTION_ID"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
