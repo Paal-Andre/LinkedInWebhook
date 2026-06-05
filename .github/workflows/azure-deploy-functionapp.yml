@@ -1,0 +1,57 @@
+name: Azure Deploy Function App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - linkedin-function-app/**
+      - .github/workflows/azure-deploy-functionapp.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate function app name
+        shell: bash
+        run: |
+          if [ -z "$FUNCTIONAPP_NAME" ]; then
+            echo "GitHub variable AZURE_FUNCTIONAPP_NAME must be set." >&2
+            exit 1
+          fi
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          cd linkedin-function-app
+          npm ci
+
+      - name: Deploy Function App
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ env.FUNCTIONAPP_NAME }}
+          package: linkedin-function-app

@@ -1,8 +1,8 @@
 {
-  "name": "linkedin-challenge-proxy-function",
+  "name": "linkedin-function-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Minimal LinkedIn challenge proxy for Power Automate",
+  "description": "Azure Function app for LinkedIn webhook registration, challenge handling, and Power Automate forwarding",
   "main": "src/functions/*.js",
   "scripts": {
     "start": "func start"

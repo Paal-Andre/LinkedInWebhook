@@ -1,2 +1,5 @@
 node_modules/
 .env
+local.settings.json
+linkedin-function-app/local.settings.json
+*.zip
