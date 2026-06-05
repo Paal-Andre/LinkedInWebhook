@@ -23,7 +23,7 @@ app.http('linkedinWebhook', {
         return handleChallenge(challengeCode);
       }
 
-      return handleEventForward(request, context);
+      return handleEventForward(request);
     }
 
     return jsonResponse(405, { error: 'Metode ikke tillatt' });
@@ -76,8 +76,9 @@ async function readChallengeCodeFromPost(request) {
   return '';
 }
 
-async function handleEventForward(request, context) {
+async function handleEventForward(request) {
   const forwardUrl = (process.env.POWER_AUTOMATE_WEBHOOK_URL || '').trim();
+  const forwardMethod = readForwardMethod();
 
   if (!forwardUrl) {
     return jsonResponse(500, { error: 'POWER_AUTOMATE_WEBHOOK_URL mangler' });
@@ -96,15 +97,47 @@ async function handleEventForward(request, context) {
       return jsonResponse(401, { error: 'Ugyldig X-LI-Signature' });
     }
 
-    return forwardPayload(forwardUrl, rawBody, request.headers.get('content-type'));
+    return forwardPayload(forwardUrl, rawBody, request.headers.get('content-type'), forwardMethod);
   }
 
   const rawBody = await request.text();
-  return forwardPayload(forwardUrl, rawBody, request.headers.get('content-type'));
+  return forwardPayload(forwardUrl, rawBody, request.headers.get('content-type'), forwardMethod);
 }
 
-async function forwardPayload(forwardUrl, body, contentType) {
-  const response = await fetch(forwardUrl, {
+async function forwardPayload(forwardUrl, body, contentType, method) {
+  let response = await sendToPowerAutomate(forwardUrl, body, contentType, method);
+  let errorText = response.ok ? '' : await response.text();
+
+  if (!response.ok && method === 'POST' && shouldRetryAsGet(errorText)) {
+    response = await sendToPowerAutomate(forwardUrl, body, contentType, 'GET');
+    errorText = response.ok ? '' : await response.text();
+  }
+
+  if (!response.ok) {
+    return jsonResponse(502, {
+      error: `Videresending feilet (${response.status}): ${errorText}`
+    });
+  }
+
+  return jsonResponse(202, { status: 'forwarded' });
+}
+
+async function sendToPowerAutomate(forwardUrl, body, contentType, method) {
+  if (method === 'GET') {
+    const url = new URL(forwardUrl);
+    url.searchParams.set('payloadBase64', Buffer.from(body || '', 'utf8').toString('base64'));
+    url.searchParams.set('payloadContentType', contentType || 'application/json');
+    url.searchParams.set('source', 'linkedin-challenge-proxy-function');
+
+    return fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'x-forwarded-by': 'linkedin-challenge-proxy-function'
+      }
+    });
+  }
+
+  return fetch(forwardUrl, {
     method: 'POST',
     headers: {
       'content-type': contentType || 'application/json',
@@ -112,15 +145,19 @@ async function forwardPayload(forwardUrl, body, contentType) {
     },
     body
   });
+}
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    return jsonResponse(502, {
-      error: `Videresending feilet (${response.status}): ${errorText}`
-    });
+function shouldRetryAsGet(errorText) {
+  if (!errorText) {
+    return false;
   }
 
-  return jsonResponse(202, { status: 'forwarded' });
+  return errorText.includes('TriggerRequestMethodNotValid') && errorText.includes("expected 'GET'");
+}
+
+function readForwardMethod() {
+  const method = (process.env.POWER_AUTOMATE_WEBHOOK_METHOD || 'POST').trim().toUpperCase();
+  return method === 'GET' ? 'GET' : 'POST';
 }
 
 function verifyLinkedInSignature(rawBody, signatureHeader, clientSecret) {

@@ -115,8 +115,18 @@ Den gjør kun dette:
 4. Sett verdier:
    - `LINKEDIN_CLIENT_SECRET`
    - `POWER_AUTOMATE_WEBHOOK_URL`
+   - `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` anbefalt, `GET` ved behov)
    - `VERIFY_LINKEDIN_SIGNATURE` (`true`/`false`)
 5. Kjør lokalt:
    - `npm start`
 
 Denne varianten er stateless og passer godt når Power Automate skal gjøre all businesslogikk.
+
+### Feil: TriggerRequestMethodNotValid (expected 'GET', actual 'POST')
+
+Dette betyr at HTTP-triggeren i Power Automate er satt til `GET`.
+
+- Anbefalt: sett triggeren til `POST`.
+- Alternativ: sett `POWER_AUTOMATE_WEBHOOK_METHOD=GET` i Function config.
+
+Når `GET` brukes, sender proxy payload som query-parameteren `payloadBase64` (base64-kodet JSON) fordi GET ikke har request body.
