@@ -128,7 +128,8 @@ app.get('/', (_req, res) => {
         <p>
           Denne siden brukes av deg (ingen kundelogin). Fyll inn kundedata,
           kjør OAuth mot kundens Campaign Manager-bruker, og appen registrerer
-          leadNotifications automatisk.
+          leadNotifications automatisk mot denne tjenesten. Hendelser videresendes
+          deretter til kundens endepunkt.
         </p>
 
         <form method="POST" action="/auth/linkedin/start">
@@ -138,7 +139,7 @@ app.get('/', (_req, res) => {
           </label>
 
           <label>
-            Kundens webhook endpoint (https)
+            Kundens mottaker-endepunkt (https, for videresending)
             <input name="customerWebhookUrl" required placeholder="https://kunde.no/webhook/linkedin" />
           </label>
 
@@ -188,6 +189,9 @@ app.get('/', (_req, res) => {
         </p>
         <p class="small">
           Webhook base URL mot LinkedIn: <code>${escapeHtml(getWebhookBaseUrlHint())}</code>
+        </p>
+        <p class="small">
+          LinkedIn-registrert webhook blir automatisk: <code>&lt;webhook-base-url&gt;/webhooks/linkedin/&lt;id&gt;</code>
         </p>
       </div>
     </div>
