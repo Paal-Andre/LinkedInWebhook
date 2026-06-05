@@ -1,0 +1,70 @@
+name: Azure Provision Static Web App
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - infra/**
+      - .github/workflows/azure-provision-static-webapp.yml
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: rg-linkedin
+  LOCATION: westeurope
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve app name
+        id: naming
+        shell: bash
+        run: |
+          if [ -n "${{ vars.AZURE_STATIC_WEBAPP_NAME }}" ]; then
+            echo "name=${{ vars.AZURE_STATIC_WEBAPP_NAME }}" >> "$GITHUB_OUTPUT"
+          else
+            REPO_SLUG="${GITHUB_REPOSITORY##*/}"
+            SAFE="$(echo "$REPO_SLUG" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')"
+            echo "name=${SAFE}-swa" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure resource group exists
+        shell: bash
+        run: |
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --output none
+
+      - name: Deploy Bicep
+        shell: bash
+        run: |
+          az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/main.bicep \
+            --parameters staticWebAppName="${{ steps.naming.outputs.name }}" location="$LOCATION" sku="Free" \
+            --output table
+
+      - name: Print Static Web App details
+        shell: bash
+        run: |
+          az staticwebapp show \
+            --name "${{ steps.naming.outputs.name }}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query "{name:name, defaultHostname:defaultHostname, location:location, id:id}" \
+            --output table
