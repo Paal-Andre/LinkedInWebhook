@@ -17,6 +17,7 @@ env:
   FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
   RESOURCE_GROUP: rg-linkedin
 
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -28,9 +29,10 @@ jobs:
         shell: bash
         run: |
           if [ -z "$FUNCTIONAPP_NAME" ]; then
-            echo "GitHub variable AZURE_FUNCTIONAPP_NAME must be set." >&2
-            exit 1
+            FUNCTIONAPP_NAME="func-linkedin-ie0tz6"
           fi
+          echo "FUNCTIONAPP_NAME=$FUNCTIONAPP_NAME" >> "$GITHUB_ENV"
+          echo "Using Function App: $FUNCTIONAPP_NAME"
 
       - name: Azure login via OIDC (no external action)
         shell: bash
