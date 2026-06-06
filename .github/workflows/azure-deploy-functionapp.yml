@@ -16,6 +16,7 @@ permissions:
 env:
   FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
   RESOURCE_GROUP: rg-linkedin
+  ACTIVE_SUBSCRIPTION_ID: 8f7632eb-3eca-4579-885f-187540753d20
 
 
 jobs:
@@ -52,23 +53,8 @@ jobs:
 
           az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
 
-          ACTIVE_SUBSCRIPTION_ID=""
-          for SUB_ID in $(az account list --query "[].id" -o tsv); do
-            if az group show --subscription "$SUB_ID" --name "$RESOURCE_GROUP" --output none 2>/dev/null; then
-              ACTIVE_SUBSCRIPTION_ID="$SUB_ID"
-              break
-            fi
-          done
-
-          if [ -z "$ACTIVE_SUBSCRIPTION_ID" ]; then
-            echo "Resource group '$RESOURCE_GROUP' was not found in any accessible subscription for this principal." >&2
-            exit 1
-          fi
-
           az account set --subscription "$ACTIVE_SUBSCRIPTION_ID"
           echo "Using subscription: $ACTIVE_SUBSCRIPTION_ID"
-
-          echo "ACTIVE_SUBSCRIPTION_ID=$ACTIVE_SUBSCRIPTION_ID" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
