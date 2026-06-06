@@ -6,7 +6,10 @@ const oauthStateStore = new Map();
 const subscriptionStore = new Map();
 const subscriptionsTableName = process.env.SUBSCRIPTIONS_TABLE_NAME || 'LinkedInSubscriptions';
 const subscriptionsPartitionKey = 'subscriptions';
+const endpointStatsTableName = process.env.ENDPOINT_STATS_TABLE_NAME || 'LinkedInEndpointStats';
+const endpointStatsPartitionKey = 'webhooks';
 let subscriptionsTableClient;
+let endpointStatsTableClient;
 
 app.http('adminPage', {
   methods: ['GET'],
@@ -423,14 +426,25 @@ app.http('linkedinWebhook', {
 
       const rawBody = await request.text();
 
+      await incrementEndpointStats(subscriptionKey, config.customerId, { received: 1 });
+
       if (readBoolEnv('VERIFY_LINKEDIN_SIGNATURE')) {
         const signatureHeader = request.headers.get('x-li-signature');
         if (!verifyLinkedInSignature(rawBody, signatureHeader, process.env.LINKEDIN_CLIENT_SECRET || '')) {
+          await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
           return jsonResponse(401, { error: 'Ugyldig X-LI-Signature' });
         }
       }
 
-      return forwardToPowerAutomate(config.customerWebhookUrl, rawBody, request.headers.get('content-type'));
+      const forwardResult = await forwardToPowerAutomate(config.customerWebhookUrl, rawBody, request.headers.get('content-type'));
+
+      if (forwardResult.status === 202) {
+        await incrementEndpointStats(subscriptionKey, config.customerId, { forwarded: 1 });
+      } else {
+        await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
+      }
+
+      return forwardResult;
     } catch (error) {
       return jsonResponse(500, { error: toMessage(error) });
     }
@@ -444,6 +458,19 @@ app.http('listSubscriptions', {
   handler: async (request) => {
     const ownerFilter = (request.query.get('owner') || '').trim();
     const items = await listSubscriptions(ownerFilter);
+
+    return jsonResponse(200, { count: items.length, items });
+  }
+});
+
+app.http('endpointStats', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'api/endpoint-stats',
+  handler: async (request) => {
+    const subscriptionKey = (request.query.get('subscriptionKey') || '').trim();
+    const customerId = (request.query.get('customerId') || '').trim();
+    const items = await listEndpointStats(subscriptionKey, customerId);
 
     return jsonResponse(200, { count: items.length, items });
   }
@@ -564,6 +591,100 @@ async function getSubscriptionsTableClient() {
 
   subscriptionsTableClient = client;
   return subscriptionsTableClient;
+}
+
+async function getEndpointStatsTableClient() {
+  if (endpointStatsTableClient) {
+    return endpointStatsTableClient;
+  }
+
+  const connectionString = process.env.AzureWebJobsStorage || '';
+  if (!connectionString) {
+    throw new Error('AzureWebJobsStorage mangler for endpoint-statistikk');
+  }
+
+  const client = TableClient.fromConnectionString(connectionString, endpointStatsTableName);
+
+  try {
+    await client.createTable();
+  } catch (error) {
+    if (!(error && error.statusCode === 409)) {
+      throw error;
+    }
+  }
+
+  endpointStatsTableClient = client;
+  return endpointStatsTableClient;
+}
+
+async function incrementEndpointStats(subscriptionKey, customerId, delta) {
+  const client = await getEndpointStatsTableClient();
+  const now = new Date().toISOString();
+
+  let current = {
+    partitionKey: endpointStatsPartitionKey,
+    rowKey: subscriptionKey,
+    customerId: customerId || '',
+    received: 0,
+    forwarded: 0,
+    forwardFailed: 0,
+    updatedAt: now
+  };
+
+  try {
+    const existing = await client.getEntity(endpointStatsPartitionKey, subscriptionKey);
+    current = {
+      ...current,
+      ...existing,
+      received: Number(existing.received || 0),
+      forwarded: Number(existing.forwarded || 0),
+      forwardFailed: Number(existing.forwardFailed || 0)
+    };
+  } catch (error) {
+    if (!(error && error.statusCode === 404)) {
+      throw error;
+    }
+  }
+
+  const next = {
+    partitionKey: endpointStatsPartitionKey,
+    rowKey: subscriptionKey,
+    customerId: customerId || current.customerId || '',
+    received: current.received + Number(delta.received || 0),
+    forwarded: current.forwarded + Number(delta.forwarded || 0),
+    forwardFailed: current.forwardFailed + Number(delta.forwardFailed || 0),
+    updatedAt: now
+  };
+
+  await client.upsertEntity(next, 'Replace');
+}
+
+async function listEndpointStats(subscriptionKeyFilter, customerIdFilter) {
+  const client = await getEndpointStatsTableClient();
+  const items = [];
+  const normalizedKeyFilter = (subscriptionKeyFilter || '').trim();
+  const normalizedCustomerFilter = (customerIdFilter || '').trim().toLowerCase();
+
+  for await (const entity of client.listEntities({ queryOptions: { filter: `PartitionKey eq '${endpointStatsPartitionKey}'` } })) {
+    if (normalizedKeyFilter && String(entity.rowKey || '') !== normalizedKeyFilter) {
+      continue;
+    }
+
+    if (normalizedCustomerFilter && String(entity.customerId || '').trim().toLowerCase() !== normalizedCustomerFilter) {
+      continue;
+    }
+
+    items.push({
+      subscriptionKey: entity.rowKey,
+      customerId: entity.customerId || '',
+      received: Number(entity.received || 0),
+      forwarded: Number(entity.forwarded || 0),
+      forwardFailed: Number(entity.forwardFailed || 0),
+      updatedAt: entity.updatedAt || ''
+    });
+  }
+
+  return items;
 }
 
 function parseStoredPayload(payload) {

@@ -18,6 +18,7 @@ Den dekker hele flyten:
 - `GET /auth/linkedin/callback` fullforer OAuth + registrering
 - `GET|POST /webhooks/linkedin/{subscriptionKey}` challenge + events
 - `GET /api/subscriptions` viser aktive subscriptions i minne
+- `GET /api/endpoint-stats` viser teller for mottak og videresending til Power Automate
 
 ## Konfigurasjon
 
@@ -34,6 +35,7 @@ Valgfritt:
 - `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` eller `GET`)
 - `VERIFY_LINKEDIN_SIGNATURE` (`true` eller `false`)
 - `SUBSCRIPTIONS_TABLE_NAME` (default: `LinkedInSubscriptions`)
+- `ENDPOINT_STATS_TABLE_NAME` (default: `LinkedInEndpointStats`)
 
 ## Kjoring lokalt
 
