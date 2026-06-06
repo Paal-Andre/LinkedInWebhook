@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           cd linkedin-function-app
-          zip -r ../functionapp.zip . -x "node_modules/*" "local.settings.json"
+          zip -r ../functionapp.zip . -x "local.settings.json"
 
           az functionapp deployment source config-zip \
             --subscription "$ACTIVE_SUBSCRIPTION_ID" \
