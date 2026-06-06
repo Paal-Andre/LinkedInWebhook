@@ -11,7 +11,7 @@ let subscriptionsTableClient;
 app.http('adminPage', {
   methods: ['GET'],
   authLevel: 'anonymous',
-  route: 'admin',
+  route: 'dashboard',
   handler: async () => {
     const apiVersion = process.env.LINKEDIN_API_VERSION || '202605';
     const redirectUri = getRedirectUri();
@@ -207,6 +207,27 @@ app.http('startOAuth', {
     try {
       assertConfig();
       if (request.method === 'GET') {
+        const lookupOwnerUrn = (request.query.get('lookupOwnerUrn') || '').trim();
+        const lookupApiVersion = (request.query.get('apiVersion') || process.env.LINKEDIN_API_VERSION || '202605').trim();
+
+        if (lookupOwnerUrn) {
+          const state = crypto.randomUUID();
+          oauthStateStore.set(state, {
+            mode: 'lookup',
+            ownerUrn: lookupOwnerUrn,
+            apiVersion: lookupApiVersion
+          });
+
+          const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
+          authUrl.searchParams.set('response_type', 'code');
+          authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
+          authUrl.searchParams.set('redirect_uri', getRedirectUri());
+          authUrl.searchParams.set('scope', process.env.LINKEDIN_OAUTH_SCOPES || 'r_marketing_leadgen_automation');
+          authUrl.searchParams.set('state', state);
+
+          return redirectResponse(authUrl.toString());
+        }
+
         return htmlResponse(renderStartOAuthForm(process.env.LINKEDIN_API_VERSION || '202605'));
       }
 
@@ -264,6 +285,42 @@ app.http('startOAuth', {
   }
 });
 
+app.http('startLookupOAuth', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'auth/linkedin/lookup',
+  handler: async (request) => {
+    try {
+      assertConfig();
+
+      const ownerUrn = (request.query.get('ownerUrn') || '').trim();
+      const apiVersion = (request.query.get('apiVersion') || process.env.LINKEDIN_API_VERSION || '202605').trim();
+
+      if (!ownerUrn) {
+        return jsonResponse(400, { error: 'ownerUrn mangler' });
+      }
+
+      const state = crypto.randomUUID();
+      oauthStateStore.set(state, {
+        mode: 'lookup',
+        ownerUrn,
+        apiVersion
+      });
+
+      const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
+      authUrl.searchParams.set('redirect_uri', getRedirectUri());
+      authUrl.searchParams.set('scope', process.env.LINKEDIN_OAUTH_SCOPES || 'r_marketing_leadgen_automation');
+      authUrl.searchParams.set('state', state);
+
+      return redirectResponse(authUrl.toString());
+    } catch (error) {
+      return jsonResponse(500, { error: toMessage(error) });
+    }
+  }
+});
+
 app.http('oauthCallback', {
   methods: ['GET'],
   authLevel: 'anonymous',
@@ -290,6 +347,11 @@ app.http('oauthCallback', {
       const token = tokenResponse.access_token;
       if (!token) {
         return jsonResponse(500, { error: 'Fikk ikke access_token fra LinkedIn' });
+      }
+
+      if (config.mode === 'lookup') {
+        const linkedInSubscriptions = await fetchLinkedInSubscriptions(token, config.ownerUrn, config.apiVersion);
+        return htmlResponse(renderLinkedInLookupResultPage(config.ownerUrn, linkedInSubscriptions));
       }
 
       const subscriptionKey = crypto.randomUUID();
@@ -670,6 +732,67 @@ async function fetchLinkedInToken(code) {
   return body;
 }
 
+async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
+  const subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion);
+  const normalizedOwnerUrn = (ownerUrn || '').trim().toLowerCase();
+
+  if (!normalizedOwnerUrn) {
+    return subscriptions;
+  }
+
+  return subscriptions.filter((item) => subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn));
+}
+
+async function fetchLinkedInSubscriptionsRaw(token, apiVersion) {
+  const response = await fetch('https://api.linkedin.com/rest/leadNotifications', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'LinkedIn-Version': apiVersion,
+      'X-RestLi-Protocol-Version': '2.0.0'
+    }
+  });
+
+  const text = await response.text();
+  const body = tryJson(text);
+
+  if (!response.ok) {
+    throw new Error(`leadNotifications list feilet (${response.status}): ${JSON.stringify(body)}`);
+  }
+
+  if (Array.isArray(body)) {
+    return body;
+  }
+
+  if (Array.isArray(body.elements)) {
+    return body.elements;
+  }
+
+  if (Array.isArray(body.results)) {
+    return body.results;
+  }
+
+  return [];
+}
+
+function subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn) {
+  const owner = item && item.owner;
+
+  if (owner && typeof owner === 'object') {
+    for (const value of Object.values(owner)) {
+      if (typeof value === 'string' && value.toLowerCase() === normalizedOwnerUrn) {
+        return true;
+      }
+    }
+  }
+
+  if (typeof item.ownerUrn === 'string' && item.ownerUrn.toLowerCase() === normalizedOwnerUrn) {
+    return true;
+  }
+
+  return JSON.stringify(item).toLowerCase().includes(normalizedOwnerUrn);
+}
+
 async function createLeadNotificationSubscription(token, config) {
   const payload = {
     webhook: config.webhook,
@@ -789,6 +912,12 @@ function renderStartOAuthForm(apiVersion) {
       textarea { min-height: 90px; resize: vertical; }
       .full { grid-column: span 2; }
       button { grid-column: span 2; border: 0; border-radius: 8px; padding: 11px 14px; background: #0a66c2; color: #fff; font-weight: 600; cursor: pointer; }
+      .lookup { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7edf6; }
+      .lookup-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+      .lookup-row button { grid-column: auto; }
+      .results { margin-top: 12px; display: grid; gap: 10px; }
+      .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 10px 12px; background: #fbfdff; }
+      .muted { color: #5a687f; font-size: 13px; }
       @media (max-width: 740px) { form { grid-template-columns: 1fr; } .full, button { grid-column: span 1; } }
     </style>
   </head>
@@ -839,6 +968,91 @@ function renderStartOAuthForm(apiVersion) {
           </label>
           <button type="submit">Start OAuth + register webhook</button>
         </form>
+
+        <div class="lookup">
+          <h2>Finn registrerte webhooks per LinkedIn ID</h2>
+          <div class="lookup-row">
+            <label>
+              LinkedIn owner URN eller ID
+              <input id="ownerLookup" placeholder="urn:li:sponsoredAccount:123456 eller 123456" />
+            </label>
+            <button id="lookupButton" type="button">Sok</button>
+          </div>
+          <p class="muted">Tips: Du kan bruke full URN eller bare numerisk ID.</p>
+          <div id="lookupResults" class="results"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const ownerInput = document.getElementById('ownerLookup');
+      const lookupButton = document.getElementById('lookupButton');
+      const lookupResults = document.getElementById('lookupResults');
+
+      async function lookupSubscriptions() {
+        const ownerValue = (ownerInput.value || '').trim();
+        lookupResults.innerHTML = '';
+
+        if (!ownerValue) {
+          lookupResults.textContent = 'Skriv inn LinkedIn owner URN eller ID.';
+          return;
+        }
+
+        lookupButton.disabled = true;
+        lookupButton.textContent = 'Starter OAuth...';
+        window.location.href = '/auth/linkedin/start?lookupOwnerUrn=' + encodeURIComponent(ownerValue)
+          + '&apiVersion=' + encodeURIComponent('${escapeHtml(apiVersion)}');
+      }
+
+      function escapeHtmlText(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      lookupButton.addEventListener('click', lookupSubscriptions);
+      ownerInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          lookupSubscriptions();
+        }
+      });
+    </script>
+  </body>
+</html>`;
+}
+
+function renderLinkedInLookupResultPage(ownerUrn, items) {
+  const rows = items.length
+    ? items.map((item) => `<div class="result-card"><pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre></div>`).join('')
+    : '<p>Ingen subscriptions funnet hos LinkedIn for angitt owner.</p>';
+
+  return `<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LinkedIn Subscriptions</title>
+    <style>
+      body { font-family: Segoe UI, sans-serif; margin: 0; background: #f4f7fb; color: #1f2430; }
+      .wrap { max-width: 980px; margin: 32px auto; padding: 0 16px; }
+      .card { background: #fff; border: 1px solid #d7e0ec; border-radius: 12px; padding: 22px; }
+      .result-card { border: 1px solid #d7e0ec; border-radius: 10px; margin-top: 10px; padding: 12px; background: #fbfdff; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+      a { color: #0a66c2; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Subscriptions fra LinkedIn API</h1>
+        <p><b>Owner filter:</b> ${escapeHtml(ownerUrn)}</p>
+        <p><b>Antall treff:</b> ${items.length}</p>
+        ${rows}
+        <p><a href="/start">Tilbake til start</a></p>
       </div>
     </div>
   </body>
