@@ -733,7 +733,18 @@ async function fetchLinkedInToken(code) {
 }
 
 async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
-  const subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn);
+  let subscriptions;
+
+  try {
+    subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn);
+  } catch (error) {
+    const fallbackSubscriptions = await fetchLinkedInSubscriptionsByKnownIds(token, apiVersion);
+    if (fallbackSubscriptions.length === 0) {
+      throw error;
+    }
+
+    subscriptions = fallbackSubscriptions;
+  }
 
   const normalizedOwnerUrn = (ownerUrn || '').trim().toLowerCase();
 
@@ -742,6 +753,50 @@ async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
   }
 
   return subscriptions.filter((item) => subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn));
+}
+
+async function fetchLinkedInSubscriptionsByKnownIds(token, apiVersion) {
+  const localItems = await listSubscriptions('');
+  const knownIds = new Set();
+
+  for (const item of localItems) {
+    const id = item && item.linkedInSubscription && item.linkedInSubscription.xRestLiId;
+    if (id && String(id).trim()) {
+      knownIds.add(String(id).trim());
+    }
+  }
+
+  const resolved = [];
+  for (const id of knownIds) {
+    try {
+      const remoteSubscription = await fetchLinkedInSubscriptionById(token, id, apiVersion);
+      resolved.push(remoteSubscription);
+    } catch (_error) {
+      // Continue if one ID is gone or inaccessible.
+    }
+  }
+
+  return resolved;
+}
+
+async function fetchLinkedInSubscriptionById(token, subscriptionId, apiVersion) {
+  const response = await fetch(`https://api.linkedin.com/rest/leadNotifications/${encodeURIComponent(subscriptionId)}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'LinkedIn-Version': apiVersion,
+      'X-RestLi-Protocol-Version': '2.0.0'
+    }
+  });
+
+  const text = await response.text();
+  const body = tryJson(text);
+
+  if (!response.ok) {
+    throw new Error(`leadNotifications get feilet (${response.status}) id=${subscriptionId}: ${JSON.stringify(body)}`);
+  }
+
+  return body;
 }
 
 async function fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn) {
