@@ -42,6 +42,10 @@ app.http('adminPage', {
       .lookup-row button { grid-column: auto; }
       .results { margin-top: 12px; display: grid; gap: 10px; }
       .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 10px 12px; background: #fbfdff; }
+      .stats { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7edf6; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+      th, td { border-bottom: 1px solid #e7edf6; text-align: left; padding: 8px 6px; vertical-align: top; }
+      th { color: #3b4a63; font-weight: 600; }
       .muted { color: #5a687f; font-size: 13px; }
       @media (max-width: 740px) { form { grid-template-columns: 1fr; } .full, button { grid-column: span 1; } }
     </style>
@@ -119,6 +123,13 @@ app.http('adminPage', {
           <p class="muted">Tips: Du kan bruke full URN eller bare numerisk ID.</p>
           <div id="lookupResults" class="results"></div>
         </div>
+
+        <div class="stats">
+          <h2>Teller for mottak og videresending</h2>
+          <p class="muted">Tallene viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
+          <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <div id="statsResults" class="results"></div>
+        </div>
       </div>
     </div>
 
@@ -126,6 +137,8 @@ app.http('adminPage', {
       const ownerInput = document.getElementById('ownerLookup');
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
+      const refreshStatsButton = document.getElementById('refreshStatsButton');
+      const statsResults = document.getElementById('statsResults');
 
       async function lookupSubscriptions() {
         const ownerValue = (ownerInput.value || '').trim();
@@ -178,6 +191,49 @@ app.http('adminPage', {
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
+      }
+
+      async function loadStats() {
+        statsResults.innerHTML = '';
+        refreshStatsButton.disabled = true;
+        refreshStatsButton.textContent = 'Laster...';
+
+        try {
+          const response = await fetch('/api/endpoint-stats');
+          const data = await response.json();
+
+          if (!response.ok) {
+            statsResults.textContent = data.error || 'Klarte ikke hente tellerdata.';
+            return;
+          }
+
+          if (!data.items || data.items.length === 0) {
+            statsResults.innerHTML = '<div class="result-card">Ingen hendelser registrert enda. Dette betyr vanligvis at LinkedIn ikke har sendt eventer til webhooken ennå.</div>';
+            return;
+          }
+
+          const rows = data.items.map(function (item) {
+            return '<tr>'
+              + '<td>' + escapeHtmlText(item.subscriptionKey || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.customerId || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.received || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
+              + '</tr>';
+          }).join('');
+
+          statsResults.innerHTML = ''
+            + '<table>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<tbody>' + rows + '</tbody>'
+            + '</table>';
+        } catch (_error) {
+          statsResults.textContent = 'Feil ved henting av tellerdata.';
+        } finally {
+          refreshStatsButton.disabled = false;
+          refreshStatsButton.textContent = 'Oppdater tellere';
+        }
       }
 
       lookupButton.addEventListener('click', lookupSubscriptions);
@@ -1143,8 +1199,12 @@ function renderStartOAuthForm(apiVersion) {
       .lookup { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7edf6; }
       .lookup-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
       .lookup-row button { grid-column: auto; }
+      .stats { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7edf6; }
       .results { margin-top: 12px; display: grid; gap: 10px; }
       .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 10px 12px; background: #fbfdff; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+      th, td { border-bottom: 1px solid #e7edf6; text-align: left; padding: 8px 6px; vertical-align: top; }
+      th { color: #3b4a63; font-weight: 600; }
       .muted { color: #5a687f; font-size: 13px; }
       @media (max-width: 740px) { form { grid-template-columns: 1fr; } .full, button { grid-column: span 1; } }
     </style>
@@ -1209,6 +1269,13 @@ function renderStartOAuthForm(apiVersion) {
           <p class="muted">Tips: Du kan bruke full URN eller bare numerisk ID.</p>
           <div id="lookupResults" class="results"></div>
         </div>
+
+        <div class="stats">
+          <h2>Teller for mottak og videresending</h2>
+          <p class="muted">Viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
+          <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <div id="statsResults" class="results"></div>
+        </div>
       </div>
     </div>
 
@@ -1216,6 +1283,8 @@ function renderStartOAuthForm(apiVersion) {
       const ownerInput = document.getElementById('ownerLookup');
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
+      const refreshStatsButton = document.getElementById('refreshStatsButton');
+      const statsResults = document.getElementById('statsResults');
 
       async function lookupSubscriptions() {
         const ownerValue = (ownerInput.value || '').trim();
@@ -1241,6 +1310,49 @@ function renderStartOAuthForm(apiVersion) {
           .replace(/'/g, '&#039;');
       }
 
+      async function loadStats() {
+        statsResults.innerHTML = '';
+        refreshStatsButton.disabled = true;
+        refreshStatsButton.textContent = 'Laster...';
+
+        try {
+          const response = await fetch('/api/endpoint-stats');
+          const data = await response.json();
+
+          if (!response.ok) {
+            statsResults.textContent = data.error || 'Klarte ikke hente tellerdata.';
+            return;
+          }
+
+          if (!data.items || data.items.length === 0) {
+            statsResults.innerHTML = '<div class="result-card">Ingen registrerte hendelser ennå. Dette betyr vanligvis at LinkedIn ikke har sendt lead-events til webhooken.</div>';
+            return;
+          }
+
+          const rows = data.items.map(function (item) {
+            return '<tr>'
+              + '<td>' + escapeHtmlText(item.subscriptionKey || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.customerId || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.received || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
+              + '</tr>';
+          }).join('');
+
+          statsResults.innerHTML = ''
+            + '<table>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<tbody>' + rows + '</tbody>'
+            + '</table>';
+        } catch (_error) {
+          statsResults.textContent = 'Feil ved henting av tellerdata.';
+        } finally {
+          refreshStatsButton.disabled = false;
+          refreshStatsButton.textContent = 'Oppdater tellere';
+        }
+      }
+
       lookupButton.addEventListener('click', lookupSubscriptions);
       ownerInput.addEventListener('keydown', function (event) {
         if (event.key === 'Enter') {
@@ -1248,6 +1360,8 @@ function renderStartOAuthForm(apiVersion) {
           lookupSubscriptions();
         }
       });
+      refreshStatsButton.addEventListener('click', loadStats);
+      loadStats();
     </script>
   </body>
 </html>`;
