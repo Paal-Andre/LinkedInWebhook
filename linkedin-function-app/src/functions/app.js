@@ -1,8 +1,12 @@
 const crypto = require('crypto');
 const { app } = require('@azure/functions');
+const { TableClient } = require('@azure/data-tables');
 
 const oauthStateStore = new Map();
 const subscriptionStore = new Map();
+const subscriptionsTableName = process.env.SUBSCRIPTIONS_TABLE_NAME || 'LinkedInSubscriptions';
+const subscriptionsPartitionKey = 'subscriptions';
+let subscriptionsTableClient;
 
 app.http('adminPage', {
   methods: ['GET'],
@@ -97,6 +101,15 @@ app.http('adminPage', {
     </div>
   </body>
 </html>`);
+  }
+});
+
+app.http('startPage', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'start',
+  handler: async () => {
+    return htmlResponse(renderStartOAuthForm(process.env.LINKEDIN_API_VERSION || '202605'));
   }
 });
 
@@ -206,13 +219,15 @@ app.http('oauthCallback', {
         apiVersion: config.apiVersion
       });
 
-      subscriptionStore.set(subscriptionKey, {
+      const savedSubscription = {
         createdAt: new Date().toISOString(),
         customerId: config.customerId,
         customerWebhookUrl: config.customerWebhookUrl,
         webhookUrlForLinkedIn,
         linkedInSubscription: linkedInResult
-      });
+      };
+
+      await saveSubscription(subscriptionKey, savedSubscription);
 
       return htmlResponse(`<!doctype html>
 <html lang="no">
@@ -251,7 +266,7 @@ app.http('linkedinWebhook', {
         return challengeResponse(challengeCode);
       }
 
-      const config = subscriptionStore.get(subscriptionKey);
+      const config = await getSubscription(subscriptionKey);
       if (!config) {
         return jsonResponse(404, { error: 'Ukjent subscriptionKey' });
       }
@@ -277,14 +292,106 @@ app.http('listSubscriptions', {
   authLevel: 'anonymous',
   route: 'api/subscriptions',
   handler: async () => {
-    const items = Array.from(subscriptionStore.entries()).map(([subscriptionKey, value]) => ({
-      subscriptionKey,
-      ...value
-    }));
+    const items = await listSubscriptions();
 
     return jsonResponse(200, { count: items.length, items });
   }
 });
+
+async function saveSubscription(subscriptionKey, value) {
+  subscriptionStore.set(subscriptionKey, value);
+
+  const client = await getSubscriptionsTableClient();
+  await client.upsertEntity({
+    partitionKey: subscriptionsPartitionKey,
+    rowKey: subscriptionKey,
+    customerId: value.customerId || '',
+    createdAt: value.createdAt || new Date().toISOString(),
+    payload: JSON.stringify(value)
+  }, 'Replace');
+}
+
+async function getSubscription(subscriptionKey) {
+  const fromMemory = subscriptionStore.get(subscriptionKey);
+  if (fromMemory) {
+    return fromMemory;
+  }
+
+  const client = await getSubscriptionsTableClient();
+
+  try {
+    const entity = await client.getEntity(subscriptionsPartitionKey, subscriptionKey);
+    const parsed = parseStoredPayload(entity.payload);
+    if (!parsed) {
+      return null;
+    }
+
+    subscriptionStore.set(subscriptionKey, parsed);
+    return parsed;
+  } catch (error) {
+    if (error && error.statusCode === 404) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function listSubscriptions() {
+  const client = await getSubscriptionsTableClient();
+  const items = [];
+
+  for await (const entity of client.listEntities({ queryOptions: { filter: `PartitionKey eq '${subscriptionsPartitionKey}'` } })) {
+    const parsed = parseStoredPayload(entity.payload);
+    if (!parsed) {
+      continue;
+    }
+
+    subscriptionStore.set(entity.rowKey, parsed);
+    items.push({
+      subscriptionKey: entity.rowKey,
+      ...parsed
+    });
+  }
+
+  return items;
+}
+
+async function getSubscriptionsTableClient() {
+  if (subscriptionsTableClient) {
+    return subscriptionsTableClient;
+  }
+
+  const connectionString = process.env.AzureWebJobsStorage || '';
+  if (!connectionString) {
+    throw new Error('AzureWebJobsStorage mangler for subscription-persistens');
+  }
+
+  const client = TableClient.fromConnectionString(connectionString, subscriptionsTableName);
+
+  try {
+    await client.createTable();
+  } catch (error) {
+    if (!(error && error.statusCode === 409)) {
+      throw error;
+    }
+  }
+
+  subscriptionsTableClient = client;
+  return subscriptionsTableClient;
+}
+
+function parseStoredPayload(payload) {
+  if (!payload || typeof payload !== 'string') {
+    return null;
+  }
+
+  try {
+    return JSON.parse(payload);
+  } catch (_error) {
+    return null;
+  }
+}
 
 function challengeResponse(challengeCode) {
   const secret = process.env.LINKEDIN_CLIENT_SECRET || '';

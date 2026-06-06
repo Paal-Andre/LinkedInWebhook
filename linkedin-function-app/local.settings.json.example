@@ -9,6 +9,7 @@
     "LINKEDIN_OAUTH_SCOPES": "r_marketing_leadgen_automation",
     "LINKEDIN_API_VERSION": "202605",
     "WEBHOOK_PUBLIC_BASE_URL": "https://<your-function-app>.azurewebsites.net",
+    "SUBSCRIPTIONS_TABLE_NAME": "LinkedInSubscriptions",
     "POWER_AUTOMATE_WEBHOOK_URL": "https://prod-xx.westeurope.logic.azure.com/workflows/...",
     "POWER_AUTOMATE_WEBHOOK_METHOD": "POST",
     "VERIFY_LINKEDIN_SIGNATURE": "false"

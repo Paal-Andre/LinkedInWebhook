@@ -8,10 +8,12 @@ Den dekker hele flyten:
 - Registrering av leadNotifications subscription
 - Challenge-respons (hex HMAC SHA256)
 - Videresending av events til Power Automate
+- Persistens av subscriptions i Azure Table Storage (stabilt ved restart/skalering)
 
 ## Endepunkter
 
-- `GET /admin` admin-side med registreringsskjema
+- `GET /start` startside med registreringsskjema
+- `GET /admin` alternativ admin-side
 - `POST /auth/linkedin/start` starter OAuth
 - `GET /auth/linkedin/callback` fullforer OAuth + registrering
 - `GET|POST /webhooks/linkedin/{subscriptionKey}` challenge + events
@@ -31,6 +33,7 @@ Valgfritt:
 - `LINKEDIN_REDIRECT_URI` (default: `<WEBHOOK_PUBLIC_BASE_URL>/auth/linkedin/callback`)
 - `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` eller `GET`)
 - `VERIFY_LINKEDIN_SIGNATURE` (`true` eller `false`)
+- `SUBSCRIPTIONS_TABLE_NAME` (default: `LinkedInSubscriptions`)
 
 ## Kjoring lokalt
 
