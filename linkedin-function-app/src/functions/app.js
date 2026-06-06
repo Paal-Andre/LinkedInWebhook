@@ -733,7 +733,7 @@ async function fetchLinkedInToken(code) {
 }
 
 async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
-  const subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion);
+  const subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn);
   const normalizedOwnerUrn = (ownerUrn || '').trim().toLowerCase();
 
   if (!normalizedOwnerUrn) {
@@ -743,36 +743,61 @@ async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
   return subscriptions.filter((item) => subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn));
 }
 
-async function fetchLinkedInSubscriptionsRaw(token, apiVersion) {
-  const response = await fetch('https://api.linkedin.com/rest/leadNotifications', {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'LinkedIn-Version': apiVersion,
-      'X-RestLi-Protocol-Version': '2.0.0'
+async function fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn) {
+  const owner = (ownerUrn || '').trim();
+  const attempts = [];
+
+  // LinkedIn Rest.li resources often require a finder query (q=...).
+  if (owner) {
+    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owner&owner=${encodeURIComponent(owner)}`);
+    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owners&owners=List(${encodeURIComponent(owner)})`);
+    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=criteria&owner=${encodeURIComponent(owner)}`);
+  }
+
+  attempts.push('https://api.linkedin.com/rest/leadNotifications?q=owner');
+  attempts.push('https://api.linkedin.com/rest/leadNotifications');
+
+  let lastError;
+
+  for (const url of attempts) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'LinkedIn-Version': apiVersion,
+        'X-RestLi-Protocol-Version': '2.0.0'
+      }
+    });
+
+    const text = await response.text();
+    const body = tryJson(text);
+
+    if (response.ok) {
+      if (Array.isArray(body)) {
+        return body;
+      }
+
+      if (Array.isArray(body.elements)) {
+        return body.elements;
+      }
+
+      if (Array.isArray(body.results)) {
+        return body.results;
+      }
+
+      return [];
     }
-  });
 
-  const text = await response.text();
-  const body = tryJson(text);
+    lastError = { status: response.status, body, url };
 
-  if (!response.ok) {
-    throw new Error(`leadNotifications list feilet (${response.status}): ${JSON.stringify(body)}`);
+    // Try next finder only when resource/finder is missing.
+    if (response.status !== 404) {
+      break;
+    }
   }
 
-  if (Array.isArray(body)) {
-    return body;
-  }
-
-  if (Array.isArray(body.elements)) {
-    return body.elements;
-  }
-
-  if (Array.isArray(body.results)) {
-    return body.results;
-  }
-
-  return [];
+  const errorDetails = lastError || { status: 0, body: {}, url: 'unknown' };
+  throw new Error(`leadNotifications list feilet (${errorDetails.status}) via ${errorDetails.url}: ${JSON.stringify(errorDetails.body)}`);
 }
 
 function subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn) {
