@@ -18,6 +18,7 @@ env:
   RESOURCE_GROUP: rg-linkedin
   ACTIVE_SUBSCRIPTION_ID: 8f7632eb-3eca-4579-885f-187540753d20
   ACTIVE_TENANT_ID: e7b931d0-cec1-4377-a051-e243b7561b40
+  ACTIVE_CLIENT_ID: 7f36c4b1-281f-4e8c-bf99-f5cd3c236ee3
 
 
 jobs:
@@ -38,20 +39,18 @@ jobs:
 
       - name: Azure login via OIDC (no external action)
         shell: bash
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         run: |
           set -euo pipefail
 
-          if [ -z "$AZURE_CLIENT_ID" ]; then
-            echo "Missing AZURE_CLIENT_ID secret" >&2
+          if [ -z "$ACTIVE_CLIENT_ID" ]; then
+            echo "Missing ACTIVE_CLIENT_ID" >&2
             exit 1
           fi
 
           TOKEN_RESPONSE=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange")
           OIDC_TOKEN=$(python3 -c 'import sys, json; print(json.load(sys.stdin)["value"])' <<< "$TOKEN_RESPONSE")
 
-          az login --service-principal -u "$AZURE_CLIENT_ID" -t "$ACTIVE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
+          az login --service-principal -u "$ACTIVE_CLIENT_ID" -t "$ACTIVE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
 
           echo "Accessible subscriptions for OIDC identity:" 
           az account list --query "[].{name:name,id:id,tenantId:tenantId}" -o table
