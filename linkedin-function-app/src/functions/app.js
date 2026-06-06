@@ -34,6 +34,12 @@ app.http('adminPage', {
       .full { grid-column: span 2; }
       button { grid-column: span 2; border: 0; border-radius: 8px; padding: 11px 14px; background: #0a66c2; color: #fff; font-weight: 600; cursor: pointer; }
       code { background: #eef3fa; border-radius: 6px; padding: 2px 6px; }
+      .lookup { margin-top: 22px; padding-top: 14px; border-top: 1px solid #e7edf6; }
+      .lookup-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+      .lookup-row button { grid-column: auto; }
+      .results { margin-top: 12px; display: grid; gap: 10px; }
+      .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 10px 12px; background: #fbfdff; }
+      .muted { color: #5a687f; font-size: 13px; }
       @media (max-width: 740px) { form { grid-template-columns: 1fr; } .full, button { grid-column: span 1; } }
     </style>
   </head>
@@ -97,8 +103,88 @@ app.http('adminPage', {
 
         <p>Callback URI: <code>${escapeHtml(redirectUri)}</code></p>
         <p>Webhook base: <code>${escapeHtml(webhookBase)}</code></p>
+
+        <div class="lookup">
+          <h2>Finn registrerte webhooks per LinkedIn ID</h2>
+          <div class="lookup-row">
+            <label>
+              LinkedIn owner URN eller ID
+              <input id="ownerLookup" placeholder="urn:li:sponsoredAccount:123456 eller 123456" />
+            </label>
+            <button id="lookupButton" type="button">Sok</button>
+          </div>
+          <p class="muted">Tips: Du kan bruke full URN eller bare numerisk ID.</p>
+          <div id="lookupResults" class="results"></div>
+        </div>
       </div>
     </div>
+
+    <script>
+      const ownerInput = document.getElementById('ownerLookup');
+      const lookupButton = document.getElementById('lookupButton');
+      const lookupResults = document.getElementById('lookupResults');
+
+      async function lookupSubscriptions() {
+        const ownerValue = (ownerInput.value || '').trim();
+        lookupResults.innerHTML = '';
+
+        if (!ownerValue) {
+          lookupResults.textContent = 'Skriv inn LinkedIn owner URN eller ID.';
+          return;
+        }
+
+        lookupButton.disabled = true;
+        lookupButton.textContent = 'Soker...';
+
+        try {
+          const response = await fetch('/api/subscriptions?owner=' + encodeURIComponent(ownerValue));
+          const data = await response.json();
+
+          if (!response.ok) {
+            lookupResults.textContent = data.error || 'Klarte ikke hente subscriptions.';
+            return;
+          }
+
+          if (!data.items || data.items.length === 0) {
+            lookupResults.textContent = 'Ingen registrerte webhooks funnet for angitt LinkedIn ID.';
+            return;
+          }
+
+          lookupResults.innerHTML = data.items.map(function (item) {
+            return '<div class="result-card">'
+              + '<div><b>Subscription key:</b> ' + escapeHtmlText(item.subscriptionKey || '') + '</div>'
+              + '<div><b>Owner:</b> ' + escapeHtmlText(item.ownerUrn || '-') + '</div>'
+              + '<div><b>Kunde:</b> ' + escapeHtmlText(item.customerId || '-') + '</div>'
+              + '<div><b>Webhook hos LinkedIn:</b> ' + escapeHtmlText(item.webhookUrlForLinkedIn || '-') + '</div>'
+              + '<div><b>Forward URL:</b> ' + escapeHtmlText(item.customerWebhookUrl || '-') + '</div>'
+              + '<div class="muted">Opprettet: ' + escapeHtmlText(item.createdAt || '-') + '</div>'
+              + '</div>';
+          }).join('');
+        } catch (_error) {
+          lookupResults.textContent = 'Feil ved kall mot API.';
+        } finally {
+          lookupButton.disabled = false;
+          lookupButton.textContent = 'Sok';
+        }
+      }
+
+      function escapeHtmlText(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      lookupButton.addEventListener('click', lookupSubscriptions);
+      ownerInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          lookupSubscriptions();
+        }
+      });
+    </script>
   </body>
 </html>`);
   }
@@ -222,6 +308,8 @@ app.http('oauthCallback', {
       const savedSubscription = {
         createdAt: new Date().toISOString(),
         customerId: config.customerId,
+        ownerType: config.ownerType,
+        ownerUrn: config.ownerUrn,
         customerWebhookUrl: config.customerWebhookUrl,
         webhookUrlForLinkedIn,
         linkedInSubscription: linkedInResult
@@ -291,8 +379,9 @@ app.http('listSubscriptions', {
   methods: ['GET'],
   authLevel: 'anonymous',
   route: 'api/subscriptions',
-  handler: async () => {
-    const items = await listSubscriptions();
+  handler: async (request) => {
+    const ownerFilter = (request.query.get('owner') || '').trim();
+    const items = await listSubscriptions(ownerFilter);
 
     return jsonResponse(200, { count: items.length, items });
   }
@@ -337,13 +426,18 @@ async function getSubscription(subscriptionKey) {
   }
 }
 
-async function listSubscriptions() {
+async function listSubscriptions(ownerFilter) {
   const client = await getSubscriptionsTableClient();
   const items = [];
+  const normalizedOwnerFilter = normalizeOwnerFilter(ownerFilter);
 
   for await (const entity of client.listEntities({ queryOptions: { filter: `PartitionKey eq '${subscriptionsPartitionKey}'` } })) {
     const parsed = parseStoredPayload(entity.payload);
     if (!parsed) {
+      continue;
+    }
+
+    if (normalizedOwnerFilter && !subscriptionMatchesOwner(parsed, normalizedOwnerFilter)) {
       continue;
     }
 
@@ -355,6 +449,35 @@ async function listSubscriptions() {
   }
 
   return items;
+}
+
+function normalizeOwnerFilter(value) {
+  if (!value) {
+    return '';
+  }
+
+  const trimmed = String(value).trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  if (trimmed.startsWith('urn:li:')) {
+    return trimmed.toLowerCase();
+  }
+
+  return trimmed.replace(/^urn:li:[^:]+:/i, '').toLowerCase();
+}
+
+function subscriptionMatchesOwner(subscription, normalizedOwnerFilter) {
+  const ownerUrn = String(subscription.ownerUrn || '').trim();
+  if (!ownerUrn) {
+    return false;
+  }
+
+  const normalizedOwnerUrn = ownerUrn.toLowerCase();
+  const ownerIdPart = ownerUrn.includes(':') ? ownerUrn.split(':').pop().toLowerCase() : normalizedOwnerUrn;
+
+  return normalizedOwnerUrn === normalizedOwnerFilter || ownerIdPart === normalizedOwnerFilter;
 }
 
 async function getSubscriptionsTableClient() {
