@@ -17,6 +17,7 @@ env:
   FUNCTIONAPP_NAME: ${{ vars.AZURE_FUNCTIONAPP_NAME }}
   RESOURCE_GROUP: rg-linkedin
   ACTIVE_SUBSCRIPTION_ID: 8f7632eb-3eca-4579-885f-187540753d20
+  ACTIVE_TENANT_ID: e7b931d0-cec1-4377-a051-e243b7561b40
 
 
 jobs:
@@ -39,19 +40,18 @@ jobs:
         shell: bash
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           set -euo pipefail
 
-          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ]; then
-            echo "Missing AZURE_CLIENT_ID / AZURE_TENANT_ID secrets" >&2
+          if [ -z "$AZURE_CLIENT_ID" ]; then
+            echo "Missing AZURE_CLIENT_ID secret" >&2
             exit 1
           fi
 
           TOKEN_RESPONSE=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange")
           OIDC_TOKEN=$(python3 -c 'import sys, json; print(json.load(sys.stdin)["value"])' <<< "$TOKEN_RESPONSE")
 
-          az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
+          az login --service-principal -u "$AZURE_CLIENT_ID" -t "$ACTIVE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
 
           az account set --subscription "$ACTIVE_SUBSCRIPTION_ID"
           echo "Using subscription: $ACTIVE_SUBSCRIPTION_ID"
