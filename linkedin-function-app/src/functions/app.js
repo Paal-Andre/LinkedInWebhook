@@ -749,9 +749,11 @@ async function fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn) {
 
   // LinkedIn Rest.li resources often require a finder query (q=...).
   if (owner) {
-    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owner&owner=${encodeURIComponent(owner)}`);
-    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owners&owners=List(${encodeURIComponent(owner)})`);
-    attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=criteria&owner=${encodeURIComponent(owner)}`);
+    const ownerCandidates = buildOwnerFinderCandidates(owner);
+    for (const ownerCandidate of ownerCandidates) {
+      attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owner&owner=${encodeURIComponent(ownerCandidate)}`);
+      attempts.push(`https://api.linkedin.com/rest/leadNotifications?q=owners&owners=${encodeURIComponent(`List(${ownerCandidate})`)}`);
+    }
   }
 
   attempts.push('https://api.linkedin.com/rest/leadNotifications?q=owner');
@@ -790,14 +792,38 @@ async function fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn) {
 
     lastError = { status: response.status, body, url };
 
-    // Try next finder only when resource/finder is missing.
-    if (response.status !== 404) {
+    // Continue probing alternative finder shapes for validation/missing-resource errors.
+    if (response.status !== 404 && response.status !== 400) {
       break;
     }
   }
 
   const errorDetails = lastError || { status: 0, body: {}, url: 'unknown' };
   throw new Error(`leadNotifications list feilet (${errorDetails.status}) via ${errorDetails.url}: ${JSON.stringify(errorDetails.body)}`);
+}
+
+function buildOwnerFinderCandidates(ownerUrn) {
+  const raw = String(ownerUrn || '').trim();
+  if (!raw) {
+    return [];
+  }
+
+  const normalized = raw.startsWith('urn:li:') ? raw : `urn:li:sponsoredAccount:${raw}`;
+  const lower = normalized.toLowerCase();
+
+  let restliUnionType = 'SPONSORED_ACCOUNT';
+  let ownerField = 'sponsoredAccount';
+
+  if (lower.includes(':organization:')) {
+    restliUnionType = 'ORGANIZATION';
+    ownerField = 'organization';
+  }
+
+  return [
+    normalized,
+    `(${ownerField}:${normalized})`,
+    `(value:${normalized},type:${restliUnionType})`
+  ];
 }
 
 function subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn) {
