@@ -39,7 +39,6 @@ jobs:
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          INPUT_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           set -euo pipefail
 
@@ -53,20 +52,14 @@ jobs:
 
           az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
 
-          if [ -n "${INPUT_SUBSCRIPTION_ID:-}" ] && az account show --subscription "$INPUT_SUBSCRIPTION_ID" --output none 2>/dev/null; then
-            az account set --subscription "$INPUT_SUBSCRIPTION_ID"
-            ACTIVE_SUBSCRIPTION_ID="$INPUT_SUBSCRIPTION_ID"
-            echo "Using configured subscription: $ACTIVE_SUBSCRIPTION_ID"
-          else
-            FALLBACK_SUBSCRIPTION_ID=$(az account list --query "[0].id" -o tsv)
-            if [ -z "$FALLBACK_SUBSCRIPTION_ID" ]; then
-              echo "No accessible Azure subscriptions found for this service principal/tenant." >&2
-              exit 1
-            fi
-            az account set --subscription "$FALLBACK_SUBSCRIPTION_ID"
-            ACTIVE_SUBSCRIPTION_ID="$FALLBACK_SUBSCRIPTION_ID"
-            echo "Using fallback subscription: $ACTIVE_SUBSCRIPTION_ID"
+          ACTIVE_SUBSCRIPTION_ID=$(az account list --query "[0].id" -o tsv)
+          if [ -z "$ACTIVE_SUBSCRIPTION_ID" ]; then
+            echo "No accessible Azure subscriptions found for this service principal/tenant." >&2
+            exit 1
           fi
+
+          az account set --subscription "$ACTIVE_SUBSCRIPTION_ID"
+          echo "Using subscription: $ACTIVE_SUBSCRIPTION_ID"
 
           echo "ACTIVE_SUBSCRIPTION_ID=$ACTIVE_SUBSCRIPTION_ID" >> "$GITHUB_ENV"
 
