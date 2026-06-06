@@ -53,6 +53,15 @@ jobs:
 
           az login --service-principal -u "$AZURE_CLIENT_ID" -t "$ACTIVE_TENANT_ID" --federated-token "$OIDC_TOKEN" --allow-no-subscriptions 1>/dev/null
 
+          echo "Accessible subscriptions for OIDC identity:" 
+          az account list --query "[].{name:name,id:id,tenantId:tenantId}" -o table
+
+          if ! az account show --subscription "$ACTIVE_SUBSCRIPTION_ID" --output none 2>/dev/null; then
+            echo "Target subscription '$ACTIVE_SUBSCRIPTION_ID' is NOT accessible for this OIDC identity in tenant '$ACTIVE_TENANT_ID'." >&2
+            echo "Fix by granting this service principal access to the target subscription/resource group, or update AZURE_CLIENT_ID to the correct app registration." >&2
+            exit 1
+          fi
+
           az account set --subscription "$ACTIVE_SUBSCRIPTION_ID"
           echo "Using subscription: $ACTIVE_SUBSCRIPTION_ID"
 
