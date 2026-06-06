@@ -734,6 +734,7 @@ async function fetchLinkedInToken(code) {
 
 async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
   const subscriptions = await fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn);
+
   const normalizedOwnerUrn = (ownerUrn || '').trim().toLowerCase();
 
   if (!normalizedOwnerUrn) {
