@@ -217,6 +217,8 @@ app.http('adminPage', {
               + '<td>' + escapeHtmlText(item.subscriptionKey || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.customerId || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.received || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.receivedLinkedIn || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.receivedManual || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
@@ -225,7 +227,7 @@ app.http('adminPage', {
 
           statsResults.innerHTML = ''
             + '<table>'
-            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
             + '<tbody>' + rows + '</tbody>'
             + '</table>';
         } catch (_error) {
@@ -487,12 +489,17 @@ app.http('linkedinWebhook', {
         return jsonResponse(404, { error: 'Ukjent subscriptionKey' });
       }
 
+      const signatureHeader = request.headers.get('x-li-signature');
+      const receivedFromLinkedIn = Boolean(signatureHeader);
       const rawBody = await request.text();
 
-      await incrementEndpointStats(subscriptionKey, config.customerId, { received: 1 });
+      await incrementEndpointStats(subscriptionKey, config.customerId, {
+        received: 1,
+        receivedLinkedIn: receivedFromLinkedIn ? 1 : 0,
+        receivedManual: receivedFromLinkedIn ? 0 : 1
+      });
 
       if (readBoolEnv('VERIFY_LINKEDIN_SIGNATURE')) {
-        const signatureHeader = request.headers.get('x-li-signature');
         if (!verifyLinkedInSignature(rawBody, signatureHeader, process.env.LINKEDIN_CLIENT_SECRET || '')) {
           await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
           return jsonResponse(401, { error: 'Ugyldig X-LI-Signature' });
@@ -689,6 +696,8 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
     rowKey: subscriptionKey,
     customerId: customerId || '',
     received: 0,
+    receivedLinkedIn: 0,
+    receivedManual: 0,
     forwarded: 0,
     forwardFailed: 0,
     updatedAt: now
@@ -700,6 +709,8 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
       ...current,
       ...existing,
       received: Number(existing.received || 0),
+      receivedLinkedIn: Number(existing.receivedLinkedIn || 0),
+      receivedManual: Number(existing.receivedManual || 0),
       forwarded: Number(existing.forwarded || 0),
       forwardFailed: Number(existing.forwardFailed || 0)
     };
@@ -714,6 +725,8 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
     rowKey: subscriptionKey,
     customerId: customerId || current.customerId || '',
     received: current.received + Number(delta.received || 0),
+    receivedLinkedIn: current.receivedLinkedIn + Number(delta.receivedLinkedIn || 0),
+    receivedManual: current.receivedManual + Number(delta.receivedManual || 0),
     forwarded: current.forwarded + Number(delta.forwarded || 0),
     forwardFailed: current.forwardFailed + Number(delta.forwardFailed || 0),
     updatedAt: now
@@ -741,6 +754,8 @@ async function listEndpointStats(subscriptionKeyFilter, customerIdFilter) {
       subscriptionKey: entity.rowKey,
       customerId: entity.customerId || '',
       received: Number(entity.received || 0),
+      receivedLinkedIn: Number(entity.receivedLinkedIn || 0),
+      receivedManual: Number(entity.receivedManual || 0),
       forwarded: Number(entity.forwarded || 0),
       forwardFailed: Number(entity.forwardFailed || 0),
       updatedAt: entity.updatedAt || ''
@@ -1345,6 +1360,8 @@ function renderStartOAuthForm(apiVersion) {
               + '<td>' + escapeHtmlText(item.subscriptionKey || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.customerId || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.received || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.receivedLinkedIn || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.receivedManual || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
@@ -1353,7 +1370,7 @@ function renderStartOAuthForm(apiVersion) {
 
           statsResults.innerHTML = ''
             + '<table>'
-            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
             + '<tbody>' + rows + '</tbody>'
             + '</table>';
         } catch (_error) {
