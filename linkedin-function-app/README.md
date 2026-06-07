@@ -22,6 +22,10 @@ Den dekker hele flyten:
 
 ## Konfigurasjon
 
+For at leads skal pushes til webhooken, ma du aktivere i LinkedIn Developer App:
+
+- Webhooks -> Event type: `An action performed on a lead (created/deleted)`
+
 Kopier `local.settings.json.example` til `local.settings.json` og sett:
 
 - `LINKEDIN_CLIENT_ID`

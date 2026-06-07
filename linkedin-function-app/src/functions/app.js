@@ -297,6 +297,7 @@ app.http('startOAuth', {
       const ownerType = (form.ownerType || '').trim();
       const ownerUrn = (form.ownerUrn || '').trim();
       const leadType = (form.leadType || 'SPONSORED').trim();
+      const leadActionWebhookEnabled = (form.leadActionWebhookEnabled || '').trim().toLowerCase();
       const apiVersion = (form.apiVersion || process.env.LINKEDIN_API_VERSION || '202605').trim();
       const versionedForm = (form.versionedForm || '').trim();
       const associatedEntity = parseOptionalJson((form.associatedEntityJson || '').trim(), 'associatedEntityJson');
@@ -307,6 +308,12 @@ app.http('startOAuth', {
 
       if (!customerWebhookUrl) {
         return jsonResponse(400, { error: 'Power Automate webhook URL mangler' });
+      }
+
+      if (leadActionWebhookEnabled !== 'on') {
+        return jsonResponse(400, {
+          error: 'Du må bekrefte at LinkedIn App Webhook har event type "An action performed on a lead (created/deleted)" aktivert.'
+        });
       }
 
       const paUrl = new URL(customerWebhookUrl);
@@ -1241,6 +1248,10 @@ function renderStartOAuthForm(apiVersion) {
               <option value="COMPANY">COMPANY</option>
               <option value="ORGANIZATION_PRODUCT">ORGANIZATION_PRODUCT</option>
             </select>
+          </label>
+          <label class="full" style="display:flex;flex-direction:row;align-items:center;gap:10px;">
+            <input type="checkbox" name="leadActionWebhookEnabled" required style="width:auto;" />
+            Jeg har aktivert LinkedIn App Webhook event: "An action performed on a lead (created/deleted)"
           </label>
           <label>
             LinkedIn API version
