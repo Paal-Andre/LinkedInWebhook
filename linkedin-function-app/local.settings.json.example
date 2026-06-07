@@ -8,6 +8,7 @@
     "LINKEDIN_REDIRECT_URI": "https://<your-function-app>.azurewebsites.net/auth/linkedin/callback",
     "LINKEDIN_OAUTH_SCOPES": "r_marketing_leadgen_automation",
     "LINKEDIN_EVENT_OAUTH_SCOPES": "r_marketing_leadgen_automation r_events",
+    "LINKEDIN_AD_ACCOUNTS_OAUTH_SCOPES": "r_ads",
     "LINKEDIN_API_VERSION": "202605",
     "WEBHOOK_PUBLIC_BASE_URL": "https://<your-function-app>.azurewebsites.net",
     "SUBSCRIPTIONS_TABLE_NAME": "LinkedInSubscriptions",

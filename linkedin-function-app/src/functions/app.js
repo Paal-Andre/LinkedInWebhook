@@ -113,6 +113,18 @@ app.http('adminPage', {
         <p>Webhook base: <code>${escapeHtml(webhookBase)}</code></p>
 
         <div class="lookup">
+          <h2>Finn riktig sponsoredAccount-ID via LinkedIn Ad Accounts API</h2>
+          <div class="lookup-row">
+            <label>
+              Søk (account id, navn eller reference)
+              <input id="adAccountSearchInput" placeholder="f.eks. 123456 eller kontonavn" />
+            </label>
+            <button id="adAccountSearchButton" type="button">Søk adAccounts</button>
+          </div>
+          <p class="muted">Dette bruker LinkedIn endpoint: <code>/rest/adAccounts?q=search</code>.</p>
+        </div>
+
+        <div class="lookup">
           <h2>Finn registrerte webhooks per LinkedIn ID</h2>
           <div class="lookup-row">
             <label>
@@ -269,9 +281,28 @@ app.http('startOAuth', {
     try {
       assertConfig();
       if (request.method === 'GET') {
+        const adAccountSearchQuery = (request.query.get('adAccountSearchQuery') || '').trim();
         const discoverOwnerInput = (request.query.get('discoverOwnerInput') || '').trim();
         const lookupOwnerUrn = (request.query.get('lookupOwnerUrn') || '').trim();
         const lookupApiVersion = (request.query.get('apiVersion') || process.env.LINKEDIN_API_VERSION || '202605').trim();
+
+        if (adAccountSearchQuery) {
+          const state = crypto.randomUUID();
+          oauthStateStore.set(state, {
+            mode: 'adAccountSearch',
+            adAccountSearchQuery,
+            apiVersion: lookupApiVersion
+          });
+
+          const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
+          authUrl.searchParams.set('response_type', 'code');
+          authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
+          authUrl.searchParams.set('redirect_uri', getRedirectUri());
+          authUrl.searchParams.set('scope', resolveLinkedInAdAccountsOAuthScopes());
+          authUrl.searchParams.set('state', state);
+
+          return redirectResponse(authUrl.toString());
+        }
 
         if (discoverOwnerInput) {
           const state = crypto.randomUUID();
@@ -449,6 +480,11 @@ app.http('oauthCallback', {
       const token = tokenResponse.access_token;
       if (!token) {
         return jsonResponse(500, { error: 'Fikk ikke access_token fra LinkedIn' });
+      }
+
+      if (config.mode === 'adAccountSearch') {
+        const adAccounts = await searchLinkedInAdAccounts(token, config.adAccountSearchQuery, config.apiVersion);
+        return htmlResponse(renderLinkedInAdAccountsSearchPage(config.adAccountSearchQuery, adAccounts));
       }
 
       if (config.mode === 'urnDiscovery') {
@@ -927,6 +963,15 @@ function resolveLinkedInOAuthScopes(leadType) {
   return 'r_marketing_leadgen_automation';
 }
 
+function resolveLinkedInAdAccountsOAuthScopes() {
+  const configuredScopes = (process.env.LINKEDIN_AD_ACCOUNTS_OAUTH_SCOPES || '').trim();
+  if (configuredScopes) {
+    return configuredScopes;
+  }
+
+  return 'r_ads';
+}
+
 function getWebhookBaseUrl() {
   const raw = (process.env.WEBHOOK_PUBLIC_BASE_URL || '').trim();
   if (!raw) {
@@ -1002,6 +1047,87 @@ async function fetchLinkedInSubscriptions(token, ownerUrn, apiVersion) {
   }
 
   return subscriptions.filter((item) => subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn));
+}
+
+async function searchLinkedInAdAccounts(token, query, apiVersion) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  const urls = ['https://api.linkedin.com/rest/adAccounts?q=search'];
+
+  let lastError;
+
+  for (const url of urls) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'LinkedIn-Version': apiVersion,
+        'X-RestLi-Protocol-Version': '2.0.0'
+      }
+    });
+
+    const text = await response.text();
+    const body = tryJson(text);
+
+    if (!response.ok) {
+      lastError = { status: response.status, body, url };
+      continue;
+    }
+
+    const rawItems = Array.isArray(body.elements)
+      ? body.elements
+      : (Array.isArray(body.results) ? body.results : (Array.isArray(body) ? body : []));
+
+    const items = rawItems.map((item) => normalizeAdAccountItem(item)).filter(Boolean);
+
+    if (!normalizedQuery) {
+      return items;
+    }
+
+    return items.filter((item) => {
+      const haystack = [
+        item.accountId,
+        item.accountUrn,
+        item.name,
+        item.reference,
+        item.status,
+        item.type
+      ].join(' ').toLowerCase();
+
+      return haystack.includes(normalizedQuery);
+    });
+  }
+
+  const errorDetails = lastError || { status: 0, body: {}, url: 'unknown' };
+  throw new Error(`adAccounts search feilet (${errorDetails.status}) via ${errorDetails.url}: ${JSON.stringify(errorDetails.body)}`);
+}
+
+function normalizeAdAccountItem(item) {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const rawId = item.id || item.account || item.accountId || item.urn || '';
+  const rawIdString = String(rawId || '');
+
+  let accountId = rawIdString;
+  if (rawIdString.startsWith('urn:li:sponsoredAccount:')) {
+    accountId = rawIdString.split(':').pop() || rawIdString;
+  }
+
+  accountId = String(accountId || '').trim();
+  const accountUrn = accountId
+    ? (rawIdString.startsWith('urn:li:sponsoredAccount:') ? rawIdString : `urn:li:sponsoredAccount:${accountId}`)
+    : '';
+
+  return {
+    accountId,
+    accountUrn,
+    name: String(item.name || item.accountName || ''),
+    reference: String(item.reference || item.accountReference || ''),
+    status: String(item.status || item.servingStatuses || ''),
+    type: String(item.type || item.accountType || ''),
+    raw: item
+  };
 }
 
 async function fetchLinkedInSubscriptionsByKnownIds(token, apiVersion) {
@@ -1453,6 +1579,8 @@ function renderStartOAuthForm(apiVersion) {
       const ownerUrnHelperInput = document.getElementById('ownerUrnHelperInput');
       const ownerUrnHelperButton = document.getElementById('ownerUrnHelperButton');
       const ownerUrnHelperResults = document.getElementById('ownerUrnHelperResults');
+      const adAccountSearchInput = document.getElementById('adAccountSearchInput');
+      const adAccountSearchButton = document.getElementById('adAccountSearchButton');
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
       const refreshStatsButton = document.getElementById('refreshStatsButton');
@@ -1552,6 +1680,18 @@ function renderStartOAuthForm(apiVersion) {
           + '&apiVersion=' + encodeURIComponent('${escapeHtml(apiVersion)}');
       }
 
+      async function searchAdAccounts() {
+        const query = (adAccountSearchInput.value || '').trim();
+        if (!query) {
+          return;
+        }
+
+        adAccountSearchButton.disabled = true;
+        adAccountSearchButton.textContent = 'Starter OAuth...';
+        window.location.href = '/auth/linkedin/start?adAccountSearchQuery=' + encodeURIComponent(query)
+          + '&apiVersion=' + encodeURIComponent('${escapeHtml(apiVersion)}');
+      }
+
       function escapeHtmlText(value) {
         return String(value)
           .replace(/&/g, '&amp;')
@@ -1608,10 +1748,17 @@ function renderStartOAuthForm(apiVersion) {
 
       lookupButton.addEventListener('click', lookupSubscriptions);
       ownerUrnHelperButton.addEventListener('click', renderUrnCandidates);
+      adAccountSearchButton.addEventListener('click', searchAdAccounts);
       ownerInput.addEventListener('keydown', function (event) {
         if (event.key === 'Enter') {
           event.preventDefault();
           lookupSubscriptions();
+        }
+      });
+      adAccountSearchInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          searchAdAccounts();
         }
       });
       ownerUrnHelperInput.addEventListener('keydown', function (event) {
@@ -1655,6 +1802,59 @@ function renderLinkedInLookupResultPage(ownerUrn, items) {
         <p><b>Antall treff:</b> ${items.length}</p>
         ${rows}
         <p><a href="/start">Tilbake til start</a></p>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
+function renderLinkedInAdAccountsSearchPage(query, items) {
+  const rows = items.length
+    ? items.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.accountId || '-')}</td>
+        <td>${escapeHtml(item.accountUrn || '-')}</td>
+        <td>${escapeHtml(item.name || '-')}</td>
+        <td>${escapeHtml(item.reference || '-')}</td>
+        <td>${escapeHtml(item.status || '-')}</td>
+        <td>${escapeHtml(item.type || '-')}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="6">Ingen adAccounts funnet for søket.</td></tr>';
+
+  const recommendation = items.length
+    ? `<div class="result-card" style="margin-bottom:12px"><b>Anbefalt ownerType:</b> sponsoredAccount<br/><b>Anbefalt ownerUrn:</b> ${escapeHtml(items[0].accountUrn || '')}</div>`
+    : '<div class="result-card" style="margin-bottom:12px">Ingen treff. Prøv annen ID/tekst eller kontroller OAuth scope for ads.</div>';
+
+  return `<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LinkedIn Ad Accounts søk</title>
+    <style>
+      body { font-family: Segoe UI, sans-serif; margin: 0; background: #f4f7fb; color: #1f2430; }
+      .wrap { max-width: 1080px; margin: 32px auto; padding: 0 16px; }
+      .card { background: #fff; border: 1px solid #d7e0ec; border-radius: 12px; padding: 22px; }
+      .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 12px; background: #fbfdff; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+      th, td { border-bottom: 1px solid #e7edf6; text-align: left; padding: 8px 6px; vertical-align: top; }
+      th { color: #3b4a63; font-weight: 600; }
+      a { color: #0a66c2; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>LinkedIn Ad Accounts søk</h1>
+        <p><b>Søk:</b> ${escapeHtml(query || '-')}</p>
+        <p><b>Treff:</b> ${items.length}</p>
+        ${recommendation}
+        <table>
+          <thead><tr><th>Account ID</th><th>Owner URN</th><th>Navn</th><th>Reference</th><th>Status</th><th>Type</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p style="margin-top:12px"><a href="/start">Tilbake til start</a></p>
       </div>
     </div>
   </body>

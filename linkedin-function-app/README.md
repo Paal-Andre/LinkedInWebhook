@@ -19,6 +19,7 @@ Den dekker hele flyten:
 - `GET|POST /webhooks/linkedin/{subscriptionKey}` challenge + events
 - `GET /api/subscriptions` viser aktive subscriptions i minne
 - `GET /api/endpoint-stats` viser teller for mottak og videresending til Power Automate
+- `GET /auth/linkedin/start?adAccountSearchQuery=...` søker opp sponsored accounts via LinkedIn `adAccounts?q=search`
 
 ## Konfigurasjon
 
@@ -38,6 +39,7 @@ Valgfritt:
 - `LINKEDIN_REDIRECT_URI` (default: `<WEBHOOK_PUBLIC_BASE_URL>/auth/linkedin/callback`)
 - `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` eller `GET`)
 - `VERIFY_LINKEDIN_SIGNATURE` (`true` eller `false`)
+- `LINKEDIN_AD_ACCOUNTS_OAUTH_SCOPES` (default: `r_ads`)
 - `ALLOW_POWER_AUTOMATE_GET_FALLBACK` (`true` eller `false`, default `false`)
 - `SUBSCRIPTIONS_TABLE_NAME` (default: `LinkedInSubscriptions`)
 - `ENDPOINT_STATS_TABLE_NAME` (default: `LinkedInEndpointStats`)
