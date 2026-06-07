@@ -1434,13 +1434,28 @@ function renderStartOAuthForm(apiVersion) {
           return '<div class="result-card">'
             + '<div><b>' + escapeHtmlText(candidate.ownerType) + '</b></div>'
             + '<div style="margin-top:4px">' + escapeHtmlText(candidate.ownerUrn) + '</div>'
-            + '<button type="button" style="margin-top:8px" data-owner-type="' + escapeHtmlText(candidate.ownerType) + '" data-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Bruk denne</button>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
+            + '<button type="button" data-owner-type="' + escapeHtmlText(candidate.ownerType) + '" data-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Bruk denne</button>'
+            + '<button type="button" data-lookup-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Sjekk i LinkedIn API</button>'
+            + '</div>'
             + '</div>';
         }).join('');
 
         Array.from(ownerUrnHelperResults.querySelectorAll('button[data-owner-type]')).forEach(function (button) {
           button.addEventListener('click', function () {
             applyUrnCandidate(button.getAttribute('data-owner-type') || '', button.getAttribute('data-owner-urn') || '');
+          });
+        });
+
+        Array.from(ownerUrnHelperResults.querySelectorAll('button[data-lookup-owner-urn]')).forEach(function (button) {
+          button.addEventListener('click', function () {
+            const ownerUrn = button.getAttribute('data-lookup-owner-urn') || '';
+            if (!ownerUrn) {
+              return;
+            }
+
+            window.location.href = '/auth/linkedin/start?lookupOwnerUrn=' + encodeURIComponent(ownerUrn)
+              + '&apiVersion=' + encodeURIComponent('${escapeHtml(apiVersion)}');
           });
         });
       }
