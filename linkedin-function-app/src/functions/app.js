@@ -283,7 +283,7 @@ app.http('startOAuth', {
           authUrl.searchParams.set('response_type', 'code');
           authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
           authUrl.searchParams.set('redirect_uri', getRedirectUri());
-          authUrl.searchParams.set('scope', process.env.LINKEDIN_OAUTH_SCOPES || 'r_marketing_leadgen_automation');
+          authUrl.searchParams.set('scope', resolveLinkedInOAuthScopes('SPONSORED'));
           authUrl.searchParams.set('state', state);
 
           return redirectResponse(authUrl.toString());
@@ -327,6 +327,18 @@ app.http('startOAuth', {
         return jsonResponse(400, { error: 'ownerType må være sponsoredAccount eller organization' });
       }
 
+      if (!['SPONSORED', 'EVENT', 'COMPANY', 'ORGANIZATION_PRODUCT'].includes(leadType)) {
+        return jsonResponse(400, { error: 'leadType må være SPONSORED, EVENT, COMPANY eller ORGANIZATION_PRODUCT' });
+      }
+
+      if (leadType === 'SPONSORED' && ownerType !== 'sponsoredAccount') {
+        return jsonResponse(400, { error: 'For leadType SPONSORED må ownerType være sponsoredAccount' });
+      }
+
+      if (leadType !== 'SPONSORED' && ownerType !== 'organization') {
+        return jsonResponse(400, { error: 'For leadType EVENT/COMPANY/ORGANIZATION_PRODUCT må ownerType være organization' });
+      }
+
       const state = crypto.randomUUID();
       oauthStateStore.set(state, {
         customerId,
@@ -343,7 +355,7 @@ app.http('startOAuth', {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
       authUrl.searchParams.set('redirect_uri', getRedirectUri());
-      authUrl.searchParams.set('scope', process.env.LINKEDIN_OAUTH_SCOPES || 'r_marketing_leadgen_automation');
+      authUrl.searchParams.set('scope', resolveLinkedInOAuthScopes(leadType));
       authUrl.searchParams.set('state', state);
 
       return redirectResponse(authUrl.toString());
@@ -379,7 +391,7 @@ app.http('startLookupOAuth', {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
       authUrl.searchParams.set('redirect_uri', getRedirectUri());
-      authUrl.searchParams.set('scope', process.env.LINKEDIN_OAUTH_SCOPES || 'r_marketing_leadgen_automation');
+      authUrl.searchParams.set('scope', resolveLinkedInOAuthScopes('SPONSORED'));
       authUrl.searchParams.set('state', state);
 
       return redirectResponse(authUrl.toString());
@@ -479,7 +491,12 @@ app.http('linkedinWebhook', {
         return challengeResponse(request.query.get('challengeCode') || '');
       }
 
-      const challengeCode = await readChallengeCodeFromPost(request);
+      const rawBody = await request.text();
+      const challengeCode = readChallengeCodeFromPost(
+        request.query.get('challengeCode') || '',
+        request.headers.get('content-type') || '',
+        rawBody
+      );
       if (challengeCode) {
         return challengeResponse(challengeCode);
       }
@@ -491,7 +508,6 @@ app.http('linkedinWebhook', {
 
       const signatureHeader = request.headers.get('x-li-signature');
       const receivedFromLinkedIn = Boolean(signatureHeader);
-      const rawBody = await request.text();
 
       await incrementEndpointStats(subscriptionKey, config.customerId, {
         received: 1,
@@ -799,24 +815,34 @@ function challengeResponse(challengeCode) {
   });
 }
 
-async function readChallengeCodeFromPost(request) {
-  const queryChallenge = request.query.get('challengeCode') || '';
+function readChallengeCodeFromPost(queryChallenge, contentType, rawBody) {
   if (queryChallenge) {
     return queryChallenge;
   }
 
-  const contentType = (request.headers.get('content-type') || '').toLowerCase();
+  const normalizedContentType = String(contentType || '').toLowerCase();
+  const normalizedRawBody = String(rawBody || '');
 
-  if (contentType.includes('application/json')) {
-    const body = await request.json().catch(() => null);
+  if (normalizedContentType.includes('application/json')) {
+    const body = JSON.parse(normalizedRawBody || '{}');
     if (body && typeof body.challengeCode === 'string') {
       return body.challengeCode;
     }
   }
 
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const textBody = await request.text().catch(() => '');
-    return new URLSearchParams(textBody).get('challengeCode') || '';
+  if (normalizedContentType.includes('application/x-www-form-urlencoded')) {
+    return new URLSearchParams(normalizedRawBody).get('challengeCode') || '';
+  }
+
+  if (normalizedRawBody) {
+    try {
+      const body = JSON.parse(normalizedRawBody);
+      if (body && typeof body.challengeCode === 'string') {
+        return body.challengeCode;
+      }
+    } catch (_error) {
+      // Ignore parse errors for non-challenge payloads.
+    }
   }
 
   return '';
@@ -875,6 +901,22 @@ function assertConfig() {
 
 function getRedirectUri() {
   return (process.env.LINKEDIN_REDIRECT_URI || '').trim() || `${getWebhookBaseUrl()}/auth/linkedin/callback`;
+}
+
+function resolveLinkedInOAuthScopes(leadType) {
+  const configuredScopes = (process.env.LINKEDIN_OAUTH_SCOPES || '').trim();
+  if (configuredScopes) {
+    return configuredScopes;
+  }
+
+  const configuredEventScopes = (process.env.LINKEDIN_EVENT_OAUTH_SCOPES || '').trim();
+  const normalizedLeadType = String(leadType || '').trim().toUpperCase();
+
+  if (normalizedLeadType === 'EVENT') {
+    return configuredEventScopes || 'r_marketing_leadgen_automation r_events';
+  }
+
+  return 'r_marketing_leadgen_automation';
 }
 
 function getWebhookBaseUrl() {
