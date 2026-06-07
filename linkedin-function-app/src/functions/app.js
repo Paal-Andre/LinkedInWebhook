@@ -269,8 +269,27 @@ app.http('startOAuth', {
     try {
       assertConfig();
       if (request.method === 'GET') {
+        const discoverOwnerInput = (request.query.get('discoverOwnerInput') || '').trim();
         const lookupOwnerUrn = (request.query.get('lookupOwnerUrn') || '').trim();
         const lookupApiVersion = (request.query.get('apiVersion') || process.env.LINKEDIN_API_VERSION || '202605').trim();
+
+        if (discoverOwnerInput) {
+          const state = crypto.randomUUID();
+          oauthStateStore.set(state, {
+            mode: 'urnDiscovery',
+            ownerInput: discoverOwnerInput,
+            apiVersion: lookupApiVersion
+          });
+
+          const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
+          authUrl.searchParams.set('response_type', 'code');
+          authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
+          authUrl.searchParams.set('redirect_uri', getRedirectUri());
+          authUrl.searchParams.set('scope', resolveLinkedInOAuthScopes('SPONSORED'));
+          authUrl.searchParams.set('state', state);
+
+          return redirectResponse(authUrl.toString());
+        }
 
         if (lookupOwnerUrn) {
           const state = crypto.randomUUID();
@@ -430,6 +449,11 @@ app.http('oauthCallback', {
       const token = tokenResponse.access_token;
       if (!token) {
         return jsonResponse(500, { error: 'Fikk ikke access_token fra LinkedIn' });
+      }
+
+      if (config.mode === 'urnDiscovery') {
+        const urnDiscovery = await discoverOwnerUrnsViaLeadForms(token, config.ownerInput, config.apiVersion);
+        return htmlResponse(renderLinkedInUrnDiscoveryPage(config.ownerInput, urnDiscovery));
       }
 
       if (config.mode === 'lookup') {
@@ -1083,8 +1107,55 @@ async function fetchLinkedInSubscriptionsRaw(token, apiVersion, ownerUrn) {
   throw new Error(`leadNotifications list feilet (${errorDetails.status}) via ${errorDetails.url}: ${JSON.stringify(errorDetails.body)}`);
 }
 
-function buildOwnerFinderCandidates(ownerUrn) {
-  const raw = String(ownerUrn || '').trim();
+async function discoverOwnerUrnsViaLeadForms(token, ownerInput, apiVersion) {
+  const candidates = buildOwnerUrnCandidates(ownerInput);
+  const results = [];
+
+  for (const candidateUrn of candidates) {
+    const isOrganization = candidateUrn.toLowerCase().includes(':organization:');
+    const ownerType = isOrganization ? 'organization' : 'sponsoredAccount';
+    const ownerFinderValue = `(${ownerType}:${candidateUrn})`;
+    const url = `https://api.linkedin.com/rest/leadForms?q=owner&owner=${encodeURIComponent(ownerFinderValue)}&count=1&start=0`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'LinkedIn-Version': apiVersion,
+        'X-RestLi-Protocol-Version': '2.0.0'
+      }
+    });
+
+    const text = await response.text();
+    const body = tryJson(text);
+    const elements = Array.isArray(body.elements) ? body.elements : [];
+    const total = Number((body.paging && body.paging.total) || elements.length || 0);
+
+    results.push({
+      ownerUrn: candidateUrn,
+      ownerType,
+      status: response.status,
+      ok: response.ok,
+      formCount: total,
+      sampleFormId: elements[0] && elements[0].id ? String(elements[0].id) : '',
+      error: response.ok ? '' : JSON.stringify(body)
+    });
+  }
+
+  const recommended = results.find((item) => item.ok && item.formCount > 0)
+    || results.find((item) => item.ok)
+    || null;
+
+  return {
+    candidates,
+    results,
+    recommendedOwnerUrn: recommended ? recommended.ownerUrn : '',
+    recommendedOwnerType: recommended ? recommended.ownerType : ''
+  };
+}
+
+function buildOwnerUrnCandidates(ownerInput) {
+  const raw = String(ownerInput || '').trim();
   if (!raw) {
     return [];
   }
@@ -1105,6 +1176,12 @@ function buildOwnerFinderCandidates(ownerUrn) {
       urns.push(`urn:li:organization:${raw}`);
     }
   }
+
+  return Array.from(new Set(urns));
+}
+
+function buildOwnerFinderCandidates(ownerUrn) {
+  const urns = buildOwnerUrnCandidates(ownerUrn);
 
   const candidates = [];
   for (const urn of urns) {
@@ -1436,7 +1513,7 @@ function renderStartOAuthForm(apiVersion) {
             + '<div style="margin-top:4px">' + escapeHtmlText(candidate.ownerUrn) + '</div>'
             + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">'
             + '<button type="button" data-owner-type="' + escapeHtmlText(candidate.ownerType) + '" data-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Bruk denne</button>'
-            + '<button type="button" data-lookup-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Sjekk i LinkedIn API</button>'
+            + '<button type="button" data-discover-owner-input="' + escapeHtmlText(candidate.ownerUrn) + '">Verifiser via Lead Forms API</button>'
             + '</div>'
             + '</div>';
         }).join('');
@@ -1447,14 +1524,14 @@ function renderStartOAuthForm(apiVersion) {
           });
         });
 
-        Array.from(ownerUrnHelperResults.querySelectorAll('button[data-lookup-owner-urn]')).forEach(function (button) {
+        Array.from(ownerUrnHelperResults.querySelectorAll('button[data-discover-owner-input]')).forEach(function (button) {
           button.addEventListener('click', function () {
-            const ownerUrn = button.getAttribute('data-lookup-owner-urn') || '';
-            if (!ownerUrn) {
+            const ownerInput = button.getAttribute('data-discover-owner-input') || '';
+            if (!ownerInput) {
               return;
             }
 
-            window.location.href = '/auth/linkedin/start?lookupOwnerUrn=' + encodeURIComponent(ownerUrn)
+            window.location.href = '/auth/linkedin/start?discoverOwnerInput=' + encodeURIComponent(ownerInput)
               + '&apiVersion=' + encodeURIComponent('${escapeHtml(apiVersion)}');
           });
         });
@@ -1578,6 +1655,67 @@ function renderLinkedInLookupResultPage(ownerUrn, items) {
         <p><b>Antall treff:</b> ${items.length}</p>
         ${rows}
         <p><a href="/start">Tilbake til start</a></p>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
+function renderLinkedInUrnDiscoveryPage(ownerInput, discovery) {
+  const results = Array.isArray(discovery && discovery.results) ? discovery.results : [];
+  const recommendedOwnerUrn = (discovery && discovery.recommendedOwnerUrn) || '';
+  const recommendedOwnerType = (discovery && discovery.recommendedOwnerType) || '';
+
+  const rows = results.length
+    ? results.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.ownerType || '-')}</td>
+        <td>${escapeHtml(item.ownerUrn || '-')}</td>
+        <td>${escapeHtml(item.ok ? 'OK' : 'Feil')}</td>
+        <td>${escapeHtml(item.status || '-')}</td>
+        <td>${escapeHtml(item.formCount || 0)}</td>
+        <td>${escapeHtml(item.sampleFormId || '-')}</td>
+        <td>${escapeHtml(item.error || '-')}</td>
+      </tr>
+    `).join('')
+    : '<tr><td colspan="7">Ingen kandidater kunne testes.</td></tr>';
+
+  const recommendation = recommendedOwnerUrn
+    ? `<div class="result-card" style="margin-bottom:12px"><b>Anbefalt URN:</b> ${escapeHtml(recommendedOwnerUrn)}<br/><b>Owner type:</b> ${escapeHtml(recommendedOwnerType)}</div>`
+    : '<div class="result-card" style="margin-bottom:12px">Ingen anbefaling ennå. Sjekk status/feil for hver kandidat.</div>';
+
+  return `<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>URN-verifisering via LinkedIn Lead Forms API</title>
+    <style>
+      body { font-family: Segoe UI, sans-serif; margin: 0; background: #f4f7fb; color: #1f2430; }
+      .wrap { max-width: 1080px; margin: 32px auto; padding: 0 16px; }
+      .card { background: #fff; border: 1px solid #d7e0ec; border-radius: 12px; padding: 22px; }
+      .result-card { border: 1px solid #d7e0ec; border-radius: 10px; padding: 12px; background: #fbfdff; }
+      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+      th, td { border-bottom: 1px solid #e7edf6; text-align: left; padding: 8px 6px; vertical-align: top; }
+      th { color: #3b4a63; font-weight: 600; }
+      a { color: #0a66c2; }
+      .actions { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>URN-verifisering via LinkedIn Lead Forms API</h1>
+        <p><b>Input:</b> ${escapeHtml(ownerInput || '-')}</p>
+        ${recommendation}
+        <table>
+          <thead><tr><th>Type</th><th>Owner URN</th><th>Resultat</th><th>HTTP</th><th>Antall forms</th><th>Sample form</th><th>Feil</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="actions">
+          <a href="/start">Tilbake til start</a>
+          ${recommendedOwnerUrn ? `<a href="/auth/linkedin/start?lookupOwnerUrn=${encodeURIComponent(recommendedOwnerUrn)}">Sjekk subscriptions for anbefalt URN</a>` : ''}
+        </div>
       </div>
     </div>
   </body>
