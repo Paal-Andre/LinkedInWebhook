@@ -1089,22 +1089,41 @@ function buildOwnerFinderCandidates(ownerUrn) {
     return [];
   }
 
-  const normalized = raw.startsWith('urn:li:') ? raw : `urn:li:sponsoredAccount:${raw}`;
-  const lower = normalized.toLowerCase();
+  const urns = [];
 
-  let restliUnionType = 'SPONSORED_ACCOUNT';
-  let ownerField = 'sponsoredAccount';
-
-  if (lower.includes(':organization:')) {
-    restliUnionType = 'ORGANIZATION';
-    ownerField = 'organization';
+  if (raw.startsWith('urn:li:sponsoredAccount:') || raw.startsWith('urn:li:organization:')) {
+    urns.push(raw);
+  } else if (raw.startsWith('urn:li:')) {
+    urns.push(raw);
+  } else {
+    const numericOnly = raw.replace(/\D/g, '');
+    if (numericOnly) {
+      urns.push(`urn:li:sponsoredAccount:${numericOnly}`);
+      urns.push(`urn:li:organization:${numericOnly}`);
+    } else {
+      urns.push(`urn:li:sponsoredAccount:${raw}`);
+      urns.push(`urn:li:organization:${raw}`);
+    }
   }
 
-  return [
-    normalized,
-    `(${ownerField}:${normalized})`,
-    `(value:${normalized},type:${restliUnionType})`
-  ];
+  const candidates = [];
+  for (const urn of urns) {
+    const lower = urn.toLowerCase();
+
+    let restliUnionType = 'SPONSORED_ACCOUNT';
+    let ownerField = 'sponsoredAccount';
+
+    if (lower.includes(':organization:')) {
+      restliUnionType = 'ORGANIZATION';
+      ownerField = 'organization';
+    }
+
+    candidates.push(urn);
+    candidates.push(`(${ownerField}:${urn})`);
+    candidates.push(`(value:${urn},type:${restliUnionType})`);
+  }
+
+  return Array.from(new Set(candidates));
 }
 
 function subscriptionMatchesOwnerUrn(item, normalizedOwnerUrn) {
@@ -1282,14 +1301,23 @@ function renderStartOAuthForm(apiVersion) {
           </label>
           <label>
             Owner type
-            <select name="ownerType" required>
+            <select id="ownerTypeInput" name="ownerType" required>
               <option value="sponsoredAccount" selected>sponsoredAccount</option>
               <option value="organization">organization</option>
             </select>
           </label>
           <label>
             Owner URN
-            <input name="ownerUrn" required placeholder="urn:li:sponsoredAccount:123456" />
+            <input id="ownerUrnInput" name="ownerUrn" required placeholder="urn:li:sponsoredAccount:123456" />
+          </label>
+          <label class="full">
+            URN-hjelper (finn riktig owner URN)
+            <div class="lookup-row">
+              <input id="ownerUrnHelperInput" placeholder="123456 eller urn:li:organization:123456" />
+              <button id="ownerUrnHelperButton" type="button">Finn URN-kandidater</button>
+            </div>
+            <p class="muted">Tips: Hvis du bare har numerisk ID, foreslår vi både sponsoredAccount og organization.</p>
+            <div id="ownerUrnHelperResults" class="results"></div>
           </label>
           <label>
             Lead type
@@ -1343,10 +1371,79 @@ function renderStartOAuthForm(apiVersion) {
 
     <script>
       const ownerInput = document.getElementById('ownerLookup');
+      const ownerTypeInput = document.getElementById('ownerTypeInput');
+      const ownerUrnInput = document.getElementById('ownerUrnInput');
+      const ownerUrnHelperInput = document.getElementById('ownerUrnHelperInput');
+      const ownerUrnHelperButton = document.getElementById('ownerUrnHelperButton');
+      const ownerUrnHelperResults = document.getElementById('ownerUrnHelperResults');
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
       const refreshStatsButton = document.getElementById('refreshStatsButton');
       const statsResults = document.getElementById('statsResults');
+
+      function buildOwnerUrnCandidates(value) {
+        const raw = String(value || '').trim();
+        if (!raw) {
+          return [];
+        }
+
+        if (raw.startsWith('urn:li:sponsoredAccount:')) {
+          return [{ ownerType: 'sponsoredAccount', ownerUrn: raw }];
+        }
+
+        if (raw.startsWith('urn:li:organization:')) {
+          return [{ ownerType: 'organization', ownerUrn: raw }];
+        }
+
+        if (raw.startsWith('urn:li:')) {
+          return [
+            { ownerType: 'sponsoredAccount', ownerUrn: raw },
+            { ownerType: 'organization', ownerUrn: raw }
+          ];
+        }
+
+        const numericOnly = raw.replace(/\D/g, '');
+        if (!numericOnly) {
+          return [
+            { ownerType: 'sponsoredAccount', ownerUrn: raw },
+            { ownerType: 'organization', ownerUrn: raw }
+          ];
+        }
+
+        return [
+          { ownerType: 'sponsoredAccount', ownerUrn: 'urn:li:sponsoredAccount:' + numericOnly },
+          { ownerType: 'organization', ownerUrn: 'urn:li:organization:' + numericOnly }
+        ];
+      }
+
+      function applyUrnCandidate(ownerType, ownerUrn) {
+        ownerTypeInput.value = ownerType;
+        ownerUrnInput.value = ownerUrn;
+      }
+
+      function renderUrnCandidates() {
+        ownerUrnHelperResults.innerHTML = '';
+        const candidates = buildOwnerUrnCandidates(ownerUrnHelperInput.value || '');
+
+        if (candidates.length === 0) {
+          ownerUrnHelperResults.textContent = 'Skriv inn en LinkedIn ID eller URN først.';
+          return;
+        }
+
+        ownerUrnHelperResults.innerHTML = candidates.map(function (candidate) {
+          return '<div class="result-card">'
+            + '<div><b>' + escapeHtmlText(candidate.ownerType) + '</b></div>'
+            + '<div style="margin-top:4px">' + escapeHtmlText(candidate.ownerUrn) + '</div>'
+            + '<button type="button" style="margin-top:8px" data-owner-type="' + escapeHtmlText(candidate.ownerType) + '" data-owner-urn="' + escapeHtmlText(candidate.ownerUrn) + '">Bruk denne</button>'
+            + '</div>';
+        }).join('');
+
+        Array.from(ownerUrnHelperResults.querySelectorAll('button[data-owner-type]')).forEach(function (button) {
+          button.addEventListener('click', function () {
+            applyUrnCandidate(button.getAttribute('data-owner-type') || '', button.getAttribute('data-owner-urn') || '');
+          });
+        });
+      }
 
       async function lookupSubscriptions() {
         const ownerValue = (ownerInput.value || '').trim();
@@ -1418,10 +1515,17 @@ function renderStartOAuthForm(apiVersion) {
       }
 
       lookupButton.addEventListener('click', lookupSubscriptions);
+      ownerUrnHelperButton.addEventListener('click', renderUrnCandidates);
       ownerInput.addEventListener('keydown', function (event) {
         if (event.key === 'Enter') {
           event.preventDefault();
           lookupSubscriptions();
+        }
+      });
+      ownerUrnHelperInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          renderUrnCandidates();
         }
       });
       refreshStatsButton.addEventListener('click', loadStats);
