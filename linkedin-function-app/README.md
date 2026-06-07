@@ -38,8 +38,14 @@ Valgfritt:
 - `LINKEDIN_REDIRECT_URI` (default: `<WEBHOOK_PUBLIC_BASE_URL>/auth/linkedin/callback`)
 - `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` eller `GET`)
 - `VERIFY_LINKEDIN_SIGNATURE` (`true` eller `false`)
+- `ALLOW_POWER_AUTOMATE_GET_FALLBACK` (`true` eller `false`, default `false`)
 - `SUBSCRIPTIONS_TABLE_NAME` (default: `LinkedInSubscriptions`)
 - `ENDPOINT_STATS_TABLE_NAME` (default: `LinkedInEndpointStats`)
+
+Anbefalt i produksjon:
+
+- Sett `VERIFY_LINKEDIN_SIGNATURE=true`
+- Hold `ALLOW_POWER_AUTOMATE_GET_FALLBACK=false` og konfigurer Power Automate-trigger til å akseptere `POST`
 
 ## Kjoring lokalt
 

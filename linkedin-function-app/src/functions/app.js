@@ -10,6 +10,7 @@ const endpointStatsTableName = process.env.ENDPOINT_STATS_TABLE_NAME || 'LinkedI
 const endpointStatsPartitionKey = 'webhooks';
 let subscriptionsTableClient;
 let endpointStatsTableClient;
+let hasLoggedSignatureVerificationWarning = false;
 
 app.http('adminPage', {
   methods: ['GET'],
@@ -504,14 +505,6 @@ app.http('linkedinWebhook', {
       }
 
       const rawBody = await request.text();
-      const challengeCode = readChallengeCodeFromPost(
-        request.query.get('challengeCode') || '',
-        request.headers.get('content-type') || '',
-        rawBody
-      );
-      if (challengeCode) {
-        return challengeResponse(challengeCode);
-      }
 
       const config = await getSubscription(subscriptionKey);
       if (!config) {
@@ -527,7 +520,12 @@ app.http('linkedinWebhook', {
         receivedManual: receivedFromLinkedIn ? 0 : 1
       });
 
-      if (readBoolEnv('VERIFY_LINKEDIN_SIGNATURE')) {
+      const verifyLinkedInSignatureEnabled = readBoolEnv('VERIFY_LINKEDIN_SIGNATURE');
+      if (!verifyLinkedInSignatureEnabled) {
+        warnSignatureVerificationDisabled();
+      }
+
+      if (verifyLinkedInSignatureEnabled) {
         if (!verifyLinkedInSignature(rawBody, signatureHeader, process.env.LINKEDIN_CLIENT_SECRET || '')) {
           await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
           return jsonResponse(401, { error: 'Ugyldig X-LI-Signature' });
@@ -827,46 +825,20 @@ function challengeResponse(challengeCode) {
   });
 }
 
-function readChallengeCodeFromPost(queryChallenge, contentType, rawBody) {
-  if (queryChallenge) {
-    return queryChallenge;
-  }
-
-  const normalizedContentType = String(contentType || '').toLowerCase();
-  const normalizedRawBody = String(rawBody || '');
-
-  if (normalizedContentType.includes('application/json')) {
-    const body = JSON.parse(normalizedRawBody || '{}');
-    if (body && typeof body.challengeCode === 'string') {
-      return body.challengeCode;
-    }
-  }
-
-  if (normalizedContentType.includes('application/x-www-form-urlencoded')) {
-    return new URLSearchParams(normalizedRawBody).get('challengeCode') || '';
-  }
-
-  if (normalizedRawBody) {
-    try {
-      const body = JSON.parse(normalizedRawBody);
-      if (body && typeof body.challengeCode === 'string') {
-        return body.challengeCode;
-      }
-    } catch (_error) {
-      // Ignore parse errors for non-challenge payloads.
-    }
-  }
-
-  return '';
-}
-
 async function forwardToPowerAutomate(url, body, contentType) {
   const method = readForwardMethod();
+  const allowGetFallback = readBoolEnv('ALLOW_POWER_AUTOMATE_GET_FALLBACK');
 
   let response = await sendForward(url, body, contentType, method);
   let errorText = response.ok ? '' : await response.text();
 
-  if (!response.ok && method === 'POST' && errorText.includes('TriggerRequestMethodNotValid') && errorText.includes("expected 'GET'")) {
+  if (
+    allowGetFallback
+    && !response.ok
+    && method === 'POST'
+    && errorText.includes('TriggerRequestMethodNotValid')
+    && errorText.includes("expected 'GET'")
+  ) {
     response = await sendForward(url, body, contentType, 'GET');
     errorText = response.ok ? '' : await response.text();
   }
@@ -1215,6 +1187,15 @@ function verifyLinkedInSignature(rawBody, signatureHeader, clientSecret) {
   }
 
   return crypto.timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(signatureHeader, 'utf8'));
+}
+
+function warnSignatureVerificationDisabled() {
+  if (hasLoggedSignatureVerificationWarning) {
+    return;
+  }
+
+  hasLoggedSignatureVerificationWarning = true;
+  console.warn('[SECURITY] VERIFY_LINKEDIN_SIGNATURE is disabled. Enable it in production.');
 }
 
 function readBoolEnv(name) {

@@ -14,6 +14,7 @@
     "ENDPOINT_STATS_TABLE_NAME": "LinkedInEndpointStats",
     "POWER_AUTOMATE_WEBHOOK_URL": "https://prod-xx.westeurope.logic.azure.com/workflows/...",
     "POWER_AUTOMATE_WEBHOOK_METHOD": "POST",
+    "ALLOW_POWER_AUTOMATE_GET_FALLBACK": "false",
     "VERIFY_LINKEDIN_SIGNATURE": "false"
   }
 }
