@@ -340,6 +340,7 @@ app.http('startOAuth', {
       }
 
       const state = crypto.randomUUID();
+      const oauthScopes = resolveLinkedInOAuthScopes(leadType);
       oauthStateStore.set(state, {
         customerId,
         customerWebhookUrl,
@@ -348,14 +349,15 @@ app.http('startOAuth', {
         leadType,
         apiVersion,
         versionedForm,
-        associatedEntity
+        associatedEntity,
+        oauthScopes
       });
 
       const authUrl = new URL('https://www.linkedin.com/oauth/v2/authorization');
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('client_id', process.env.LINKEDIN_CLIENT_ID || '');
       authUrl.searchParams.set('redirect_uri', getRedirectUri());
-      authUrl.searchParams.set('scope', resolveLinkedInOAuthScopes(leadType));
+      authUrl.searchParams.set('scope', oauthScopes);
       authUrl.searchParams.set('state', state);
 
       return redirectResponse(authUrl.toString());
@@ -452,6 +454,10 @@ app.http('oauthCallback', {
         customerId: config.customerId,
         ownerType: config.ownerType,
         ownerUrn: config.ownerUrn,
+        leadType: config.leadType,
+        versionedForm: config.versionedForm,
+        associatedEntity: config.associatedEntity,
+        oauthScopes: config.oauthScopes || resolveLinkedInOAuthScopes(config.leadType),
         customerWebhookUrl: config.customerWebhookUrl,
         webhookUrlForLinkedIn,
         linkedInSubscription: linkedInResult
@@ -466,7 +472,13 @@ app.http('oauthCallback', {
     <h2>Webhook registrert</h2>
     <p><b>Kunde:</b> ${escapeHtml(config.customerId)}</p>
     <p><b>Webhook URL sendt til LinkedIn:</b> ${escapeHtml(webhookUrlForLinkedIn)}</p>
+    <p><b>LeadType:</b> ${escapeHtml(config.leadType || '-')}</p>
+    <p><b>Owner:</b> ${escapeHtml(`${config.ownerType || ''}:${config.ownerUrn || ''}`)}</p>
+    <p><b>OAuth scopes brukt:</b> ${escapeHtml(config.oauthScopes || resolveLinkedInOAuthScopes(config.leadType))}</p>
     <p><b>Videresending til Power Automate:</b> ${escapeHtml(config.customerWebhookUrl)}</p>
+    <p><b>LinkedIn subscription id:</b> ${escapeHtml((linkedInResult && linkedInResult.xRestLiId) || '-')}</p>
+    <p><b>Payload sendt til LinkedIn:</b></p>
+    <pre style="background:#f6f8fa;border:1px solid #d0d7de;border-radius:8px;padding:12px;overflow:auto;max-width:100%">${escapeHtml(JSON.stringify((linkedInResult && linkedInResult.sentPayload) || {}, null, 2))}</pre>
     <p><a href="/">Tilbake</a></p>
   </body>
 </html>`);
@@ -1179,7 +1191,8 @@ async function createLeadNotificationSubscription(token, config) {
   return {
     status: response.status,
     xRestLiId: response.headers.get('x-restli-id'),
-    body
+    body,
+    sentPayload: payload
   };
 }
 
