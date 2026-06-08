@@ -140,7 +140,7 @@ app.http('adminPage', {
         <div class="stats">
           <h2>Teller for mottak og videresending</h2>
           <p class="muted">Tallene viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
-          <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <button id="refreshStatsButton" type="button" onclick="loadStats()">Oppdater tellere</button>
           <p id="statsRefreshState" class="muted"></p>
           <div id="statsResults" class="results"></div>
         </div>
@@ -264,6 +264,8 @@ app.http('adminPage', {
         }
       }
 
+      window.loadStats = loadStats;
+
       lookupButton.addEventListener('click', lookupSubscriptions);
       ownerInput.addEventListener('keydown', function (event) {
         if (event.key === 'Enter') {
@@ -271,7 +273,9 @@ app.http('adminPage', {
           lookupSubscriptions();
         }
       });
-      refreshStatsButton.addEventListener('click', loadStats);
+      if (refreshStatsButton) {
+        refreshStatsButton.addEventListener('click', loadStats);
+      }
       loadStats();
     </script>
   </body>
@@ -1668,7 +1672,7 @@ function renderStartOAuthForm(apiVersion) {
         <div class="stats">
           <h2>Teller for mottak og videresending</h2>
           <p class="muted">Viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
-          <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <button id="refreshStatsButton" type="button" onclick="loadStats()">Oppdater tellere</button>
           <p id="statsRefreshState" class="muted"></p>
           <div id="statsResults" class="results"></div>
         </div>
@@ -1861,6 +1865,8 @@ function renderStartOAuthForm(apiVersion) {
         }
       }
 
+      window.loadStats = loadStats;
+
       lookupButton.addEventListener('click', lookupSubscriptions);
       ownerUrnHelperButton.addEventListener('click', renderUrnCandidates);
       adAccountSearchButton.addEventListener('click', searchAdAccounts);
@@ -1882,7 +1888,9 @@ function renderStartOAuthForm(apiVersion) {
           renderUrnCandidates();
         }
       });
-      refreshStatsButton.addEventListener('click', loadStats);
+      if (refreshStatsButton) {
+        refreshStatsButton.addEventListener('click', loadStats);
+      }
       loadStats();
     </script>
   </body>
