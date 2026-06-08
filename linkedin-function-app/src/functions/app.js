@@ -234,13 +234,18 @@ app.http('adminPage', {
               + '<td>' + escapeHtmlText(item.receivedManual || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.lastSource || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastReceivedAt || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardStatus || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardAt || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardError || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
               + '</tr>';
           }).join('');
 
           statsResults.innerHTML = ''
             + '<table>'
-            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Siste kilde</th><th>Sist mottatt</th><th>Siste forward-status</th><th>Sist forward</th><th>Siste feil</th><th>Sist oppdatert</th></tr></thead>'
             + '<tbody>' + rows + '</tbody>'
             + '</table>';
         } catch (_error) {
@@ -258,6 +263,8 @@ app.http('adminPage', {
           lookupSubscriptions();
         }
       });
+      refreshStatsButton.addEventListener('click', loadStats);
+      loadStats();
     </script>
   </body>
 </html>`);
@@ -573,11 +580,23 @@ app.http('linkedinWebhook', {
 
       const signatureHeader = request.headers.get('x-li-signature');
       const receivedFromLinkedIn = Boolean(signatureHeader);
+      const nowIso = new Date().toISOString();
+
+      console.info('[linkedinWebhook] Event mottatt', {
+        subscriptionKey,
+        customerId: config.customerId,
+        source: receivedFromLinkedIn ? 'linkedin' : 'manual',
+        contentType: request.headers.get('content-type') || 'unknown'
+      });
 
       await incrementEndpointStats(subscriptionKey, config.customerId, {
         received: 1,
         receivedLinkedIn: receivedFromLinkedIn ? 1 : 0,
-        receivedManual: receivedFromLinkedIn ? 0 : 1
+        receivedManual: receivedFromLinkedIn ? 0 : 1,
+        meta: {
+          lastSource: receivedFromLinkedIn ? 'linkedin' : 'manual',
+          lastReceivedAt: nowIso
+        }
       });
 
       const verifyLinkedInSignatureEnabled = readBoolEnv('VERIFY_LINKEDIN_SIGNATURE');
@@ -587,20 +606,60 @@ app.http('linkedinWebhook', {
 
       if (verifyLinkedInSignatureEnabled) {
         if (!verifyLinkedInSignature(rawBody, signatureHeader, process.env.LINKEDIN_CLIENT_SECRET || '')) {
-          await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
+          await incrementEndpointStats(subscriptionKey, config.customerId, {
+            forwardFailed: 1,
+            meta: {
+              lastForwardStatus: 'signature_invalid',
+              lastForwardAt: nowIso,
+              lastForwardError: 'Ugyldig X-LI-Signature'
+            }
+          });
           return jsonResponse(401, { error: 'Ugyldig X-LI-Signature' });
         }
       }
 
-      const forwardResult = await forwardToPowerAutomate(config.customerWebhookUrl, rawBody, request.headers.get('content-type'));
+      const forwardResult = await forwardToPowerAutomate(
+        config.customerWebhookUrl,
+        rawBody,
+        request.headers.get('content-type')
+      );
 
-      if (forwardResult.status === 202) {
-        await incrementEndpointStats(subscriptionKey, config.customerId, { forwarded: 1 });
+      if (forwardResult.ok) {
+        await incrementEndpointStats(subscriptionKey, config.customerId, {
+          forwarded: 1,
+          meta: {
+            lastForwardStatus: `ok_${forwardResult.upstreamStatus}`,
+            lastForwardAt: nowIso,
+            lastForwardError: ''
+          }
+        });
+
+        console.info('[linkedinWebhook] Event videresendt', {
+          subscriptionKey,
+          customerId: config.customerId,
+          upstreamStatus: forwardResult.upstreamStatus,
+          method: forwardResult.methodUsed
+        });
       } else {
-        await incrementEndpointStats(subscriptionKey, config.customerId, { forwardFailed: 1 });
+        await incrementEndpointStats(subscriptionKey, config.customerId, {
+          forwardFailed: 1,
+          meta: {
+            lastForwardStatus: `failed_${forwardResult.upstreamStatus}`,
+            lastForwardAt: nowIso,
+            lastForwardError: forwardResult.errorText || 'Ukjent feil'
+          }
+        });
+
+        console.error('[linkedinWebhook] Videresending feilet', {
+          subscriptionKey,
+          customerId: config.customerId,
+          upstreamStatus: forwardResult.upstreamStatus,
+          method: forwardResult.methodUsed,
+          error: forwardResult.errorText || 'Ukjent feil'
+        });
       }
 
-      return forwardResult;
+      return forwardResult.response;
     } catch (error) {
       return jsonResponse(500, { error: toMessage(error) });
     }
@@ -776,6 +835,7 @@ async function getEndpointStatsTableClient() {
 async function incrementEndpointStats(subscriptionKey, customerId, delta) {
   const client = await getEndpointStatsTableClient();
   const now = new Date().toISOString();
+  const metaDelta = (delta && typeof delta.meta === 'object' && delta.meta) ? delta.meta : {};
 
   let current = {
     partitionKey: endpointStatsPartitionKey,
@@ -786,6 +846,11 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
     receivedManual: 0,
     forwarded: 0,
     forwardFailed: 0,
+    lastSource: '',
+    lastReceivedAt: '',
+    lastForwardStatus: '',
+    lastForwardAt: '',
+    lastForwardError: '',
     updatedAt: now
   };
 
@@ -798,7 +863,12 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
       receivedLinkedIn: Number(existing.receivedLinkedIn || 0),
       receivedManual: Number(existing.receivedManual || 0),
       forwarded: Number(existing.forwarded || 0),
-      forwardFailed: Number(existing.forwardFailed || 0)
+      forwardFailed: Number(existing.forwardFailed || 0),
+      lastSource: String(existing.lastSource || ''),
+      lastReceivedAt: String(existing.lastReceivedAt || ''),
+      lastForwardStatus: String(existing.lastForwardStatus || ''),
+      lastForwardAt: String(existing.lastForwardAt || ''),
+      lastForwardError: String(existing.lastForwardError || '')
     };
   } catch (error) {
     if (!(error && error.statusCode === 404)) {
@@ -815,6 +885,11 @@ async function incrementEndpointStats(subscriptionKey, customerId, delta) {
     receivedManual: current.receivedManual + Number(delta.receivedManual || 0),
     forwarded: current.forwarded + Number(delta.forwarded || 0),
     forwardFailed: current.forwardFailed + Number(delta.forwardFailed || 0),
+    lastSource: String(metaDelta.lastSource !== undefined ? metaDelta.lastSource : current.lastSource || ''),
+    lastReceivedAt: String(metaDelta.lastReceivedAt !== undefined ? metaDelta.lastReceivedAt : current.lastReceivedAt || ''),
+    lastForwardStatus: String(metaDelta.lastForwardStatus !== undefined ? metaDelta.lastForwardStatus : current.lastForwardStatus || ''),
+    lastForwardAt: String(metaDelta.lastForwardAt !== undefined ? metaDelta.lastForwardAt : current.lastForwardAt || ''),
+    lastForwardError: String(metaDelta.lastForwardError !== undefined ? metaDelta.lastForwardError : current.lastForwardError || ''),
     updatedAt: now
   };
 
@@ -844,6 +919,11 @@ async function listEndpointStats(subscriptionKeyFilter, customerIdFilter) {
       receivedManual: Number(entity.receivedManual || 0),
       forwarded: Number(entity.forwarded || 0),
       forwardFailed: Number(entity.forwardFailed || 0),
+      lastSource: entity.lastSource || '',
+      lastReceivedAt: entity.lastReceivedAt || '',
+      lastForwardStatus: entity.lastForwardStatus || '',
+      lastForwardAt: entity.lastForwardAt || '',
+      lastForwardError: entity.lastForwardError || '',
       updatedAt: entity.updatedAt || ''
     });
   }
@@ -888,6 +968,7 @@ function challengeResponse(challengeCode) {
 async function forwardToPowerAutomate(url, body, contentType) {
   const method = readForwardMethod();
   const allowGetFallback = readBoolEnv('ALLOW_POWER_AUTOMATE_GET_FALLBACK');
+  let methodUsed = method;
 
   let response = await sendForward(url, body, contentType, method);
   let errorText = response.ok ? '' : await response.text();
@@ -900,14 +981,27 @@ async function forwardToPowerAutomate(url, body, contentType) {
     && errorText.includes("expected 'GET'")
   ) {
     response = await sendForward(url, body, contentType, 'GET');
+    methodUsed = 'GET';
     errorText = response.ok ? '' : await response.text();
   }
 
   if (!response.ok) {
-    return jsonResponse(502, { error: `Videresending feilet (${response.status}): ${errorText}` });
+    return {
+      ok: false,
+      upstreamStatus: response.status,
+      errorText,
+      methodUsed,
+      response: jsonResponse(502, { error: `Videresending feilet (${response.status}): ${errorText}` })
+    };
   }
 
-  return jsonResponse(202, { status: 'forwarded' });
+  return {
+    ok: true,
+    upstreamStatus: response.status,
+    errorText: '',
+    methodUsed,
+    response: jsonResponse(202, { status: 'forwarded' })
+  };
 }
 
 async function sendForward(url, body, contentType, method) {
@@ -1729,13 +1823,18 @@ function renderStartOAuthForm(apiVersion) {
               + '<td>' + escapeHtmlText(item.receivedManual || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwarded || 0) + '</td>'
               + '<td>' + escapeHtmlText(item.forwardFailed || 0) + '</td>'
+              + '<td>' + escapeHtmlText(item.lastSource || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastReceivedAt || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardStatus || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardAt || '-') + '</td>'
+              + '<td>' + escapeHtmlText(item.lastForwardError || '-') + '</td>'
               + '<td>' + escapeHtmlText(item.updatedAt || '-') + '</td>'
               + '</tr>';
           }).join('');
 
           statsResults.innerHTML = ''
             + '<table>'
-            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Sist oppdatert</th></tr></thead>'
+            + '<thead><tr><th>Subscription key</th><th>Kunde</th><th>Mottatt</th><th>LinkedIn</th><th>Manuell</th><th>Videresendt</th><th>Feilet</th><th>Siste kilde</th><th>Sist mottatt</th><th>Siste forward-status</th><th>Sist forward</th><th>Siste feil</th><th>Sist oppdatert</th></tr></thead>'
             + '<tbody>' + rows + '</tbody>'
             + '</table>';
         } catch (_error) {

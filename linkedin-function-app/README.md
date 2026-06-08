@@ -21,6 +21,20 @@ Den dekker hele flyten:
 - `GET /api/endpoint-stats` viser teller for mottak og videresending til Power Automate
 - `GET /auth/linkedin/start?adAccountSearchQuery=...` søker opp sponsored accounts via LinkedIn `adAccounts?q=search`
 
+## Bekreft at LinkedIn faktisk treffer endepunktet
+
+Bruk dashboard (`/dashboard`) eller startside (`/start`) og se tabellen for endpoint-stats.
+
+Viktige felt:
+
+- `receivedLinkedIn`: Oker når LinkedIn sender til webhooken.
+- `lastSource`: Siste kilde (`linkedin` eller `manual`).
+- `lastReceivedAt`: Tidspunkt for siste mottak.
+- `lastForwardStatus`: Siste status for forwarding (f.eks. `ok_202`, `failed_4xx`, `signature_invalid`).
+- `lastForwardError`: Siste feilmelding fra forwarding til Power Automate.
+
+Hvis `receivedLinkedIn > 0` men `forwarded = 0` og `forwardFailed > 0`, ligger problemet i forwarding mot Power Automate og ikke i mottak fra LinkedIn.
+
 ## Konfigurasjon
 
 For at leads skal pushes til webhooken, ma du aktivere i LinkedIn Developer App:
