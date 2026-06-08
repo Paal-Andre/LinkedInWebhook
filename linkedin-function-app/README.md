@@ -1,75 +1,83 @@
 # LinkedIn Azure Function App
 
-Selvstendig Azure Function App for LinkedIn Lead Notifications.
+Azure Function App for a clean LinkedIn lead webhook setup.
 
-Den dekker hele flyten:
+Current architecture:
 
-- OAuth-start og callback mot LinkedIn
-- Registrering av leadNotifications subscription
-- Challenge-respons (hex HMAC SHA256)
-- Videresending av events til Power Automate
-- Persistens av subscriptions i Azure Table Storage (stabilt ved restart/skalering)
+- Register webhook directly at LinkedIn to your Power Automate trigger URL.
+- Use this Function App for:
+  - GUI-based OAuth + registration of leadNotifications at LinkedIn
+  - Challenge response calculation endpoint for Power Automate (`/linkedin/challenge`)
 
-## Endepunkter
+## Endpoints
 
-- `GET /start` startside med registreringsskjema
-- `GET /dashboard` alternativ admin-side
-- `POST /auth/linkedin/start` starter OAuth
-- `GET /auth/linkedin/callback` fullforer OAuth + registrering
-- `GET|POST /webhooks/linkedin/{subscriptionKey}` challenge + events
-- `GET /api/subscriptions` viser aktive subscriptions i minne
-- `GET /api/endpoint-stats` viser teller for mottak og videresending til Power Automate
-- `GET /auth/linkedin/start?adAccountSearchQuery=...` søker opp sponsored accounts via LinkedIn `adAccounts?q=search`
+- `GET /start` registration UI
+- `GET /dashboard` same UI (admin shortcut)
+- `POST /auth/linkedin/start` starts OAuth flow
+- `GET /auth/linkedin/callback` exchanges token and creates LinkedIn subscription
+- `POST /linkedin/challenge` computes `challengeResponse` (HMAC SHA256 hex)
 
-## Bekreft at LinkedIn faktisk treffer endepunktet
+## LinkedIn setup
 
-Bruk dashboard (`/dashboard`) eller startside (`/start`) og se tabellen for endpoint-stats.
+In LinkedIn Developer App, enable webhook event type:
 
-Viktige felt:
+- `An action performed on a lead (created/deleted)`
 
-- `receivedLinkedIn`: Oker når LinkedIn sender til webhooken.
-- `lastSource`: Siste kilde (`linkedin` eller `manual`).
-- `lastReceivedAt`: Tidspunkt for siste mottak.
-- `lastForwardStatus`: Siste status for forwarding (f.eks. `ok_202`, `failed_4xx`, `signature_invalid`).
-- `lastForwardError`: Siste feilmelding fra forwarding til Power Automate.
+Then use this app UI (`/start`) to register:
 
-Hvis `receivedLinkedIn > 0` men `forwarded = 0` og `forwardFailed > 0`, ligger problemet i forwarding mot Power Automate og ikke i mottak fra LinkedIn.
+- Power Automate webhook URL (the URL LinkedIn should call directly)
+- Owner type + owner URN
+- Lead type
 
-## Konfigurasjon
+## Challenge endpoint for Power Automate
 
-For at leads skal pushes til webhooken, ma du aktivere i LinkedIn Developer App:
+Request body:
 
-- Webhooks -> Event type: `An action performed on a lead (created/deleted)`
+```json
+{
+  "challengeCode": "abc123",
+  "clientSecret": "<linkedin-client-secret>"
+}
+```
 
-Kopier `local.settings.json.example` til `local.settings.json` og sett:
+Response:
+
+```json
+{
+  "challengeCode": "abc123",
+  "challengeResponse": "<hex-hmac-sha256>"
+}
+```
+
+Notes:
+
+- `clientSecret` is optional in body if `LINKEDIN_CLIENT_SECRET` is configured in app settings.
+- The endpoint is intended to be called from Power Automate HTTP actions.
+
+## Configuration
+
+Copy `local.settings.json.example` to `local.settings.json` and set:
+
+Required:
 
 - `LINKEDIN_CLIENT_ID`
 - `LINKEDIN_CLIENT_SECRET`
-- `WEBHOOK_PUBLIC_BASE_URL`
-- `POWER_AUTOMATE_WEBHOOK_URL`
+- `LINKEDIN_REDIRECT_URI` OR `WEBHOOK_PUBLIC_BASE_URL`
 
-Valgfritt:
+Optional:
 
-- `LINKEDIN_REDIRECT_URI` (default: `<WEBHOOK_PUBLIC_BASE_URL>/auth/linkedin/callback`)
-- `POWER_AUTOMATE_WEBHOOK_METHOD` (`POST` eller `GET`)
-- `VERIFY_LINKEDIN_SIGNATURE` (`true` eller `false`)
-- `LINKEDIN_AD_ACCOUNTS_OAUTH_SCOPES` (default: `r_ads`)
-- `ALLOW_POWER_AUTOMATE_GET_FALLBACK` (`true` eller `false`, default `false`)
-- `SUBSCRIPTIONS_TABLE_NAME` (default: `LinkedInSubscriptions`)
-- `ENDPOINT_STATS_TABLE_NAME` (default: `LinkedInEndpointStats`)
+- `LINKEDIN_OAUTH_SCOPES` (default used if empty)
+- `LINKEDIN_EVENT_OAUTH_SCOPES` (used for EVENT lead type)
+- `LINKEDIN_API_VERSION` (default `202605`)
+- `POWER_AUTOMATE_WEBHOOK_URL` (used as default value in UI)
 
-Anbefalt i produksjon:
+## Run locally
 
-- Sett `VERIFY_LINKEDIN_SIGNATURE=true`
-- Hold `ALLOW_POWER_AUTOMATE_GET_FALLBACK=false` og konfigurer Power Automate-trigger til å akseptere `POST`
-
-## Kjoring lokalt
-
-1. Installer Azure Functions Core Tools.
-2. Kjor:
+1. Install Azure Functions Core Tools.
+2. Run:
    - `npm install`
    - `npm start`
 
 ## Deploy
 
-Publiser mappen `linkedin-function-app/` til en Azure Function App (Node.js).
+Deploy folder `linkedin-function-app/` to an Azure Function App (Node.js).
