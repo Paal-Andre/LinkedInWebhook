@@ -141,6 +141,7 @@ app.http('adminPage', {
           <h2>Teller for mottak og videresending</h2>
           <p class="muted">Tallene viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
           <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <p id="statsRefreshState" class="muted"></p>
           <div id="statsResults" class="results"></div>
         </div>
       </div>
@@ -151,6 +152,7 @@ app.http('adminPage', {
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
       const refreshStatsButton = document.getElementById('refreshStatsButton');
+      const statsRefreshState = document.getElementById('statsRefreshState');
       const statsResults = document.getElementById('statsResults');
 
       async function lookupSubscriptions() {
@@ -208,11 +210,14 @@ app.http('adminPage', {
 
       async function loadStats() {
         statsResults.innerHTML = '';
+        if (statsRefreshState) {
+          statsRefreshState.textContent = 'Oppdaterer...';
+        }
         refreshStatsButton.disabled = true;
         refreshStatsButton.textContent = 'Laster...';
 
         try {
-          const response = await fetch('/api/endpoint-stats');
+          const response = await fetch('/api/endpoint-stats?t=' + Date.now(), { cache: 'no-store' });
           const data = await response.json();
 
           if (!response.ok) {
@@ -253,6 +258,9 @@ app.http('adminPage', {
         } finally {
           refreshStatsButton.disabled = false;
           refreshStatsButton.textContent = 'Oppdater tellere';
+          if (statsRefreshState) {
+            statsRefreshState.textContent = 'Sist oppdatert: ' + new Date().toLocaleString('nb-NO');
+          }
         }
       }
 
@@ -1661,6 +1669,7 @@ function renderStartOAuthForm(apiVersion) {
           <h2>Teller for mottak og videresending</h2>
           <p class="muted">Viser antall mottatt fra LinkedIn og antall videresendt til Power Automate per endpoint.</p>
           <button id="refreshStatsButton" type="button">Oppdater tellere</button>
+          <p id="statsRefreshState" class="muted"></p>
           <div id="statsResults" class="results"></div>
         </div>
       </div>
@@ -1678,6 +1687,7 @@ function renderStartOAuthForm(apiVersion) {
       const lookupButton = document.getElementById('lookupButton');
       const lookupResults = document.getElementById('lookupResults');
       const refreshStatsButton = document.getElementById('refreshStatsButton');
+      const statsRefreshState = document.getElementById('statsRefreshState');
       const statsResults = document.getElementById('statsResults');
 
       function buildOwnerUrnCandidates(value) {
@@ -1797,11 +1807,14 @@ function renderStartOAuthForm(apiVersion) {
 
       async function loadStats() {
         statsResults.innerHTML = '';
+        if (statsRefreshState) {
+          statsRefreshState.textContent = 'Oppdaterer...';
+        }
         refreshStatsButton.disabled = true;
         refreshStatsButton.textContent = 'Laster...';
 
         try {
-          const response = await fetch('/api/endpoint-stats');
+          const response = await fetch('/api/endpoint-stats?t=' + Date.now(), { cache: 'no-store' });
           const data = await response.json();
 
           if (!response.ok) {
@@ -1842,6 +1855,9 @@ function renderStartOAuthForm(apiVersion) {
         } finally {
           refreshStatsButton.disabled = false;
           refreshStatsButton.textContent = 'Oppdater tellere';
+          if (statsRefreshState) {
+            statsRefreshState.textContent = 'Sist oppdatert: ' + new Date().toLocaleString('nb-NO');
+          }
         }
       }
 
